@@ -112,8 +112,85 @@
     }
   }
 
-  // Replaced with the real table renderer in the next commit.
-  function renderTable(metrics) {} // eslint-disable-line no-unused-vars
+  // ---------------- rendering: distribution table ----------------
+
+  // The bucket's largest single HTLC as a fraction of the edge's max_htlc:
+  // general = the whole per-peer liquidity allocation; congestion = one
+  // slot's worth.
+  function cellFrac(m) {
+    return state.tab === "general" ? m.peerGeneralFrac : m.congestionSlotFrac;
+  }
+
+  function shadeCell(td, share) {
+    const alpha = share * 0.92;
+    td.style.background = "rgba(var(--cell-rgb), " + alpha.toFixed(3) + ")";
+    if (alpha > 0.55) td.classList.add("cell-dark");
+  }
+
+  function renderTable(metrics) {
+    $("table-caption").textContent = state.tab === "general"
+      ? "Share of mainnet directed edges able to carry a single HTLC of at " +
+        "least $X in the general bucket (per-peer liquidity allocation: " +
+        "k slots' worth). Hover a cell for sat values."
+      : "Share of mainnet directed edges able to carry a single HTLC of at " +
+        "least $X in the congestion bucket (one slot's worth of liquidity). " +
+        "Hover a cell for sat values.";
+
+    const table = el("table");
+    const thead = el("thead");
+
+    const row1 = el("tr");
+    row1.appendChild(el("th"));
+    for (const m of metrics) {
+      const th = el("th", "type-head group-start", fmtInt(m.maxAcceptedHtlcs) + " slots");
+      th.colSpan = state.prices.length;
+      row1.appendChild(th);
+    }
+    thead.appendChild(row1);
+
+    const prices = [...state.prices].sort((a, b) => a - b);
+    const thresholds = [...state.thresholds].sort((a, b) => a - b);
+
+    const row2 = el("tr");
+    row2.appendChild(el("th", "row-head", "Threshold"));
+    for (let g = 0; g < metrics.length; g++) {
+      prices.forEach((p, i) => {
+        row2.appendChild(el("th", "price-head" + (i === 0 ? " group-start" : ""),
+          "@ $" + compactUsd(p)));
+      });
+    }
+    thead.appendChild(row2);
+    table.appendChild(thead);
+
+    const tbody = el("tbody");
+    for (const t of thresholds) {
+      const tr = el("tr");
+      tr.appendChild(el("th", "row-head", "≥ " + fmtUsd(t)));
+      for (const m of metrics) {
+        const frac = cellFrac(m);
+        prices.forEach((p, i) => {
+          const td = el("td", i === 0 ? "group-start" : null);
+          if (!(frac > 0)) {
+            td.textContent = "n/a";
+            td.classList.add("na");
+          } else {
+            const req = M.requiredBaseSat(t, p, frac);
+            const share = M.shareAtOrAbove(CDF, req);
+            td.textContent = (share * 100).toFixed(1) + "%";
+            td.dataset.threshold = String(t);
+            td.dataset.price = String(p);
+            td.dataset.required = String(Math.ceil(req));
+            td.dataset.share = String(share);
+            shadeCell(td, share);
+          }
+          tr.appendChild(td);
+        });
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    $("table-wrap").replaceChildren(table);
+  }
 
   function renderAll() {
     const metrics = activeMetrics();
@@ -307,6 +384,44 @@
       renderTable(activeMetrics());
     });
   }
+
+  // ---------------- tooltip ----------------
+
+  const tooltip = $("tooltip");
+
+  function hideTooltip() {
+    tooltip.classList.add("hidden");
+  }
+
+  function showTooltip(td, x, y) {
+    const t = Number(td.dataset.threshold);
+    const p = Number(td.dataset.price);
+    const req = Number(td.dataset.required);
+    const share = Number(td.dataset.share);
+    tooltip.replaceChildren(
+      el("div", "tt-value", fmtUsd(t) + " ≈ " + fmtSat(M.usdToSat(t, p))),
+      el("div", "tt-line", "at $" + p.toLocaleString("en-US") + " / BTC"),
+      el("div", "tt-line", "needs max_htlc ≥ " + fmtSat(req)),
+      el("div", "tt-line",
+        fmtInt(share * CDF.total) + " of " + fmtInt(CDF.total) + " edges qualify"),
+    );
+    tooltip.classList.remove("hidden");
+    const pad = 14;
+    const rect = tooltip.getBoundingClientRect();
+    let left = x + pad;
+    let top = y + pad;
+    if (left + rect.width > window.innerWidth - 8) left = x - rect.width - pad;
+    if (top + rect.height > window.innerHeight - 8) top = y - rect.height - pad;
+    tooltip.style.left = left + "px";
+    tooltip.style.top = top + "px";
+  }
+
+  $("table-wrap").addEventListener("pointermove", (e) => {
+    const td = e.target.closest("td[data-price]");
+    if (td) showTooltip(td, e.clientX, e.clientY);
+    else hideTooltip();
+  });
+  $("table-wrap").addEventListener("pointerleave", hideTooltip);
 
   // ---------------- boot ----------------
 
