@@ -38,6 +38,22 @@ at least $X across BTC prices and channel types:
 
 ![HTLC distribution table](htlc_table.png)
 
+## Reproduce the numbers on the command line
+
+`analyze_buckets.py` is the headless twin of the page: it runs the same bucket
+math over the same filtered graph and prints the two tables you see in the
+browser — the per-channel-type metrics and the distribution table. Point it at
+a `describegraph` dump:
+
+```
+python3 analyze_buckets.py mainnet.json
+```
+
+All the page's controls are flags (`--general-pct`, `--congestion-pct`,
+`--channel-types`, `--min-slots`, `--alloc-pct`, `--prices`, `--thresholds`);
+`--csv PATH` dumps every cell for further plotting. Defaults match the page, so
+a bare run reproduces the example screenshots above.
+
 ## Regenerate the data
 
 `data.js` is committed so the page works from a clone. To rebuild it from a
@@ -50,6 +66,7 @@ python3 build_data.py mainnet.json --output data.js
 ## Tests
 
 ```
-node math.test.js            # pure bucket math
-python3 build_data.py --self-test   # graph filtering / histogram
+node math.test.js                    # pure bucket math (browser)
+python3 build_data.py --self-test    # graph filtering / histogram
+python3 analyze_buckets.py --self-test   # command-line bucket math
 ```

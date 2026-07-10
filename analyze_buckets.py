@@ -1,438 +1,423 @@
 #!/usr/bin/env python3
-"""Analyze BOLT #1280 local resource conservation buckets against a mainnet graph.
+"""Reproduce the jamming-mitigation explorer's numbers from the command line.
 
-Reads a `lncli describegraph` JSON dump and, for every directed channel policy
-that advertises `max_htlc_msat`, works out how the proposed general / congestion
-/ protected buckets would look, and whether an average ~$10 payment fits.
+This is the headless twin of the web explorer: it runs the *same* bucket math
+as `math.js` over the *same* filtered mainnet graph as `build_data.py`, so the
+two tables it prints match what the page renders.
+
+  1. Per-channel-type metrics (slots per bucket, per-peer allocation `k`,
+     channels an attacker needs to saturate the general bucket, and the
+     largest single HTLC each bucket admits as a % of max_htlc_value_in_flight).
+  2. The distribution table: the share of mainnet directed edges able to carry
+     a single HTLC of at least $X in the general / congestion bucket, across
+     the BTC prices and dollar thresholds you configure.
+
+Base value `B` per direction is the advertised `max_htlc_msat` (the observable
+lower bound on `max_htlc_value_in_flight_msat`), kept only when the advertising
+node forwards on more than one channel — identical to the page's data set.
 
 See PR: https://github.com/lightning/bolts/pull/1280
-Design: ~/Work/daybook/plans/2026-07-08-bolt1280-bucket-analysis-design.md
 """
 
 import argparse
+import bisect
 import csv as csvmod
 import json
 import math
 import os
 import sys
-from collections import defaultdict
+from collections import Counter
+
+from build_data import collect
 
 # --------------------------------------------------------------------------
-# Protocol constants (from BOLT #1280 recommended defaults + BOLT 2 hard cap).
+# Units.
 # --------------------------------------------------------------------------
 
-# BOLT 2 hard cap on max_accepted_htlcs per party. Verified in LND:
-#   config.go            defaultRemoteMaxHtlcs = 483
-#   input/size.go        MaxHTLCNumber = 966  (both parties; /2 = 483 per party)
-#   reputation/config.go protocolMaxAcceptedHTLCs = 483
-MAX_ACCEPTED_HTLCS = 483
-
-# Bucket split as fractions of slots (max_accepted_htlcs) and liquidity.
-GENERAL_FRAC = 0.40
-CONGESTION_FRAC = 0.20
-PROTECTED_FRAC = 0.40
-
-# Slot counts are network-wide constants (they only depend on 483).
-GENERAL_SLOTS = round(GENERAL_FRAC * MAX_ACCEPTED_HTLCS)      # 193
-CONGESTION_SLOTS = round(CONGESTION_FRAC * MAX_ACCEPTED_HTLCS)  # 97
-PROTECTED_SLOTS = round(PROTECTED_FRAC * MAX_ACCEPTED_HTLCS)   # 193
-
-# Per-peer general-bucket allocation (PR formulas).
-#   general_bucket_slot_allocation = max(5, general_bucket_slot_total * 5/100)
-GENERAL_SLOT_ALLOCATION = max(5, GENERAL_SLOTS * 5 // 100)     # 9
-
-def set_bucket_params(n=None, general_frac=None, congestion_frac=None):
-    """Recompute constants for a different max_accepted_htlcs / bucket split.
-
-    Protected absorbs the remainder so the three fractions always sum to 1.
-    """
-    global MAX_ACCEPTED_HTLCS, GENERAL_FRAC, CONGESTION_FRAC, PROTECTED_FRAC
-    global GENERAL_SLOTS, CONGESTION_SLOTS, PROTECTED_SLOTS
-    global GENERAL_SLOT_ALLOCATION
-    if n is not None:
-        MAX_ACCEPTED_HTLCS = n
-    if general_frac is not None:
-        GENERAL_FRAC = general_frac
-    if congestion_frac is not None:
-        CONGESTION_FRAC = congestion_frac
-    PROTECTED_FRAC = 1.0 - GENERAL_FRAC - CONGESTION_FRAC
-    assert PROTECTED_FRAC >= 0, "general + congestion fractions exceed 1"
-    GENERAL_SLOTS = round(GENERAL_FRAC * MAX_ACCEPTED_HTLCS)
-    CONGESTION_SLOTS = round(CONGESTION_FRAC * MAX_ACCEPTED_HTLCS)
-    PROTECTED_SLOTS = round(PROTECTED_FRAC * MAX_ACCEPTED_HTLCS)
-    GENERAL_SLOT_ALLOCATION = max(5, GENERAL_SLOTS * 5 // 100)
-
-
-# Analysis inputs.
-PAYMENT_USD = 10.0
-PRICES_USD = [50_000, 75_000, 100_000]
 SAT_PER_BTC = 100_000_000
 MSAT_PER_SAT = 1_000
 
 
 # --------------------------------------------------------------------------
-# Pure bucket math (base `B` is the direction's max_htlc_msat, in msat).
+# Pure bucket math — a faithful port of math.js so the numbers line up.
+# Buckets are expressed as *percentages* of max_accepted_htlcs / liquidity;
+# general and congestion floor, protected takes the remainder (matches the
+# page's 193/96/194, 45/22/47, 20/10/20 splits).
 # --------------------------------------------------------------------------
 
-def htlc_msat_for_price(price_usd):
-    """msat value of a PAYMENT_USD payment at the given BTC price."""
-    btc = PAYMENT_USD / price_usd
-    sat = btc * SAT_PER_BTC
-    return sat * MSAT_PER_SAT
-
-
-def congestion_threshold_msat(base_msat):
-    """Largest single HTLC the congestion bucket will admit.
-
-    Rule 5 of the PR: amount_msat < bucket_capacity_msat / bucket_slots.
-    The 20% liquidity / 20% slot fractions nearly cancel, so this is ~= B/483.
-    """
-    return (CONGESTION_FRAC * base_msat) / CONGESTION_SLOTS
-
-
-def congestion_fits(base_msat, htlc_msat):
-    return htlc_msat < congestion_threshold_msat(base_msat)
-
-
-def general_liquidity_msat(base_msat):
-    return GENERAL_FRAC * base_msat
-
-
-def general_peer_liquidity_allocation_msat(base_msat):
-    """Per-peer share of the general bucket's liquidity (PR formula)."""
-    return general_liquidity_msat(base_msat) * GENERAL_SLOT_ALLOCATION / GENERAL_SLOTS
-
-
-def general_peer_htlc_count(base_msat, htlc_msat):
-    """How many average HTLCs one peer fits in the general bucket.
-
-    One slot per HTLC, capped at GENERAL_SLOT_ALLOCATION slots; liquidity
-    "overflows" only up to the per-peer liquidity allocation.
-    """
-    liq = general_peer_liquidity_allocation_msat(base_msat)
-    by_liquidity = int(liq // htlc_msat)
-    return min(GENERAL_SLOT_ALLOCATION, by_liquidity)
-
-
-def general_wholebucket_htlc_count(base_msat, htlc_msat):
-    """Whole-bucket count (ignoring per-peer allocation), for context."""
-    by_liquidity = int(general_liquidity_msat(base_msat) // htlc_msat)
-    return min(GENERAL_SLOTS, by_liquidity)
-
-
-# --------------------------------------------------------------------------
-# Data loading.
-# --------------------------------------------------------------------------
-
-def iter_directed_bases(graph):
-    """Yield (channel_id, direction, capacity_sat, base_msat) per directed policy.
-
-    A direction is included only if it advertises max_htlc_msat > 0. Directions
-    without a policy (or with max_htlc_msat == 0) are skipped by the caller's
-    counting; here we yield None base for them so callers can tally "ignored".
-    """
-    for edge in graph.get("edges", []):
-        chan_id = edge.get("channel_id")
-        try:
-            capacity_sat = int(edge.get("capacity", 0))
-        except (TypeError, ValueError):
-            capacity_sat = 0
-        for direction, key in ((1, "node1_policy"), (2, "node2_policy")):
-            policy = edge.get(key)
-            base = None
-            if policy:
-                raw = policy.get("max_htlc_msat")
-                if raw is not None:
-                    try:
-                        val = int(raw)
-                    except (TypeError, ValueError):
-                        val = 0
-                    if val > 0:
-                        base = val
-            yield chan_id, direction, capacity_sat, base
-
-
-# --------------------------------------------------------------------------
-# Stats helpers.
-# --------------------------------------------------------------------------
-
-def percentile(sorted_vals, p):
-    if not sorted_vals:
-        return 0
-    if len(sorted_vals) == 1:
-        return sorted_vals[0]
-    k = (len(sorted_vals) - 1) * p / 100.0
-    f = int(math.floor(k))
-    c = min(f + 1, len(sorted_vals) - 1)
-    if f == c:
-        return sorted_vals[f]
-    return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
-
-
-def summarize(vals):
-    """Return a dict of summary stats for a list of numbers."""
-    if not vals:
-        return None
-    s = sorted(vals)
-    n = len(s)
+def bucket_slots(max_accepted_htlcs, general_pct, congestion_pct):
+    general = (general_pct * max_accepted_htlcs) // 100
+    congestion = (congestion_pct * max_accepted_htlcs) // 100
     return {
-        "n": n,
-        "mean": sum(s) / n,
-        "min": s[0],
-        "p10": percentile(s, 10),
-        "p25": percentile(s, 25),
-        "p50": percentile(s, 50),
-        "p75": percentile(s, 75),
-        "p90": percentile(s, 90),
-        "max": s[-1],
+        "general": general,
+        "congestion": congestion,
+        "protected": max_accepted_htlcs - general - congestion,
     }
 
 
-def fmt_sat(msat):
-    """Format a msat amount as sat (rounded) with thousands separators."""
-    return f"{int(round(msat / MSAT_PER_SAT)):,} sat"
+def per_peer_slots(general_slots, min_slots, alloc_pct):
+    """Per-peer general slot allocation: max(min, floor(pct% of n)), capped at n."""
+    by_pct = (alloc_pct * general_slots) // 100
+    return min(general_slots, max(min_slots, by_pct))
+
+
+def general_slot_frac(general_pct, general_slots):
+    """Fraction of max_htlc_value_in_flight held by one general slot."""
+    if general_slots <= 0:
+        return math.nan
+    return general_pct / 100 / general_slots
+
+
+def peer_general_frac(general_pct, general_slots, k):
+    """Largest general HTLC = the whole per-peer allocation (k slots' worth)."""
+    return general_slot_frac(general_pct, general_slots) * k
+
+
+def congestion_slot_frac(congestion_pct, congestion_slots):
+    """Largest HTLC congestion admits: one slot's worth (amount < cap/slots)."""
+    if congestion_slots <= 0:
+        return math.nan
+    return congestion_pct / 100 / congestion_slots
+
+
+# Deterministic 32-bit PRNG (mulberry32), ported bit-for-bit from math.js so the
+# Monte-Carlo saturation figure matches the page. All arithmetic is kept in the
+# unsigned low-32-bit space; XOR/add there agree bit-for-bit with JS's ToInt32.
+def _mulberry32(seed):
+    a = seed & 0xFFFFFFFF
+
+    def rand():
+        nonlocal a
+        a = (a + 0x6D2B79F5) & 0xFFFFFFFF
+        t = a
+        t = ((t ^ (t >> 15)) * (1 | t)) & 0xFFFFFFFF
+        t = ((t + ((t ^ (t >> 7)) * (61 | t))) ^ t) & 0xFFFFFFFF
+        return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296
+
+    return rand
+
+
+def channels_to_saturate(n, k, trials=3000, seed=42):
+    """Expected channels to cover all n general slots when each channel is
+    assigned k unique uniformly-random slots (coupon collector, group drawings).
+
+    Monte Carlo because exact inclusion-exclusion is unstable near n = 193.
+    """
+    if not (n > 0) or not (k > 0):
+        return math.nan
+    if k >= n:
+        return 1.0
+    rand = _mulberry32(seed)
+    total = 0
+    for _ in range(trials):
+        slots = list(range(n))
+        covered = bytearray(n)
+        covered_count = 0
+        channels = 0
+        while covered_count < n:
+            channels += 1
+            # Partial Fisher-Yates: the first k entries become this channel's
+            # unique slot assignment.
+            for i in range(k):
+                j = i + int(rand() * (n - i))
+                slots[i], slots[j] = slots[j], slots[i]
+                if not covered[slots[i]]:
+                    covered[slots[i]] = 1
+                    covered_count += 1
+        total += channels
+    return total / trials
+
+
+def usd_to_sat(usd, price_usd_per_btc):
+    return (usd / price_usd_per_btc) * SAT_PER_BTC
+
+
+def required_base_sat(threshold_usd, price_usd_per_btc, frac):
+    """Smallest max_htlc (sat) an edge needs so `frac` of it covers the threshold."""
+    if not (frac > 0):
+        return math.inf
+    return usd_to_sat(threshold_usd, price_usd_per_btc) / frac
+
+
+# --------------------------------------------------------------------------
+# CDF over the kept edge values (ascending [sat, count] histogram).
+# --------------------------------------------------------------------------
+
+def make_cdf(hist):
+    """hist: list of (sat, count) ascending. Returns (sats, suffix, total)
+    where suffix[i] is the number of edges with value >= sats[i]."""
+    sats = [s for s, _ in hist]
+    n = len(hist)
+    suffix = [0] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        suffix[i] = suffix[i + 1] + hist[i][1]
+    return sats, suffix, (suffix[0] if n else 0)
+
+
+def share_at_or_above(cdf, required_sat):
+    """Share of edges (0..1) whose value is >= required_sat."""
+    sats, suffix, total = cdf
+    if total == 0 or required_sat == math.inf:
+        return 0.0
+    lo = bisect.bisect_left(sats, required_sat)
+    return suffix[lo] / total
+
+
+# --------------------------------------------------------------------------
+# Per-channel-type metrics (mirrors app.js typeMetrics / METRIC_ROWS).
+# --------------------------------------------------------------------------
+
+def type_metrics(n, cfg):
+    slots = bucket_slots(n, cfg["general_pct"], cfg["congestion_pct"])
+    k = per_peer_slots(slots["general"], cfg["min_slots"], cfg["alloc_pct"])
+    saturate = (channels_to_saturate(slots["general"], k, cfg["trials"])
+                if slots["general"] > 0 and k > 0 else math.nan)
+    return {
+        "n": n,
+        "slots": slots,
+        "k": k,
+        "saturate": saturate,
+        "general_slot_frac": general_slot_frac(cfg["general_pct"], slots["general"]),
+        "peer_general_frac": peer_general_frac(
+            cfg["general_pct"], slots["general"], k),
+        "congestion_slot_frac": congestion_slot_frac(
+            cfg["congestion_pct"], slots["congestion"]),
+    }
+
+
+def fmt_pct(frac, digits=2):
+    return f"{frac * 100:.{digits}f}%" if math.isfinite(frac) else "n/a"
 
 
 def fmt_int(x):
-    return f"{int(round(x)):,}"
+    return f"{round(x):,}"
 
 
-def print_summary_table(title, stats, formatter):
-    print(f"  {title}")
-    if not stats:
-        print("    (no data)")
-        return
-    order = ["min", "p10", "p25", "p50", "p75", "p90", "max", "mean"]
-    labels = {"p50": "p50(median)"}
-    for k in order:
-        label = labels.get(k, k)
-        print(f"    {label:<12} {formatter(stats[k])}")
+METRIC_ROWS = [
+    ("General slots", lambda m: str(m["slots"]["general"])),
+    ("Congestion slots", lambda m: str(m["slots"]["congestion"])),
+    ("Protected slots", lambda m: str(m["slots"]["protected"])),
+    ("Per-peer general slots (k)", lambda m: str(m["k"])),
+    ("Channels to saturate general",
+     lambda m: "~" + fmt_int(m["saturate"]) if math.isfinite(m["saturate"]) else "n/a"),
+    ("Liquidity per general slot", lambda m: fmt_pct(m["general_slot_frac"])),
+    ("Largest per-peer general HTLC", lambda m: fmt_pct(m["peer_general_frac"])),
+    ("Largest congestion HTLC", lambda m: fmt_pct(m["congestion_slot_frac"])),
+]
 
 
-def decade_histogram(vals, label, to_display=lambda v: v):
-    """Log10-decade histogram for wide-ranging positive values."""
-    counts = defaultdict(int)
-    sub_one = 0  # displayed value < 1 (dust / sub-satoshi)
-    for v in vals:
-        d = to_display(v)
-        if d < 1:
-            sub_one += 1
-            continue
-        counts[int(math.floor(math.log10(d)))] += 1
-    if not counts and not sub_one:
-        return
-    print(f"  {label} (log10 decades)")
-    total = len(vals)
-    if sub_one:
-        _hist_row("<1", sub_one, total)
-    if counts:
-        for d in range(min(counts), max(counts) + 1):
-            lo = 10 ** d
-            hi = 10 ** (d + 1)
-            _hist_row(f"{fmt_int(lo)}–{fmt_int(hi)}", counts.get(d, 0), total)
+def print_metrics_table(metrics, col=12):
+    print("-" * 78)
+    print("Per-channel-type metrics (max_accepted_htlcs)")
+    print("-" * 78)
+    head = f"  {'Metric':<32}" + "".join(f"{fmt_int(m['n']) + ' slots':>{col}}"
+                                          for m in metrics)
+    print(head)
+    for label, value in METRIC_ROWS:
+        row = f"  {label:<32}" + "".join(f"{value(m):>{col}}" for m in metrics)
+        print(row)
+    print()
 
 
-def integer_histogram(vals, label, max_val):
-    """Histogram over small integer values 0..max_val."""
-    counts = defaultdict(int)
-    for v in vals:
-        counts[int(v)] += 1
-    print(f"  {label}")
-    total = len(vals)
-    for i in range(0, max_val + 1):
-        _hist_row(str(i), counts.get(i, 0), total)
+# --------------------------------------------------------------------------
+# Distribution table (mirrors app.js renderTable): share of edges able to
+# carry a single HTLC of at least $X in the chosen bucket.
+# --------------------------------------------------------------------------
+
+def _compact_usd(x):
+    if x >= 1000:
+        return f"{x / 1000:g}k"
+    return str(x)
 
 
-def _hist_row(label, count, total, width=40):
-    frac = count / total if total else 0
-    bar = "█" * int(round(frac * width))
-    print(f"    {label:>22} | {bar:<{width}} {count:>8,} ({frac*100:5.1f}%)")
+def print_distribution_table(bucket, metrics, cdf, prices, thresholds, col=9):
+    frac_key = "peer_general_frac" if bucket == "general" else "congestion_slot_frac"
+    where = ("per-peer liquidity allocation, k slots' worth"
+             if bucket == "general" else "one slot's worth of liquidity")
+    prices = sorted(prices)
+    thresholds = sorted(thresholds)
+
+    print("-" * 78)
+    print(f"Distribution — {bucket} bucket ({where})")
+    print("Share of mainnet directed edges able to carry a single HTLC of >= $X.")
+    print("-" * 78)
+
+    # Type group header, then per-price sub-header.
+    group = " " * 12
+    for m in metrics:
+        group += f"{fmt_int(m['n']) + ' slots':^{col * len(prices)}}"
+    print(group)
+    sub = f"{'Threshold':<12}"
+    for _ in metrics:
+        for p in prices:
+            sub += f"{'@$' + _compact_usd(p):>{col}}"
+    print(sub)
+
+    for t in thresholds:
+        row = f"{'>= $' + _compact_usd(t):<12}"
+        for m in metrics:
+            frac = m[frac_key]
+            for p in prices:
+                if not (frac > 0):
+                    row += f"{'n/a':>{col}}"
+                else:
+                    req = required_base_sat(t, p, frac)
+                    share = share_at_or_above(cdf, req)
+                    row += f"{share * 100:>{col - 1}.1f}%"
+        print(row)
+    print()
 
 
 # --------------------------------------------------------------------------
 # Main analysis.
 # --------------------------------------------------------------------------
 
-def analyze(graph, csv_path=None):
-    bases = []          # base_msat per included direction
-    ignored = 0
-    csv_rows = []
+def analyze(graph, cfg, source, csv_path=None):
+    kept, dropped, single = collect(graph)
+    if not kept:
+        print("no usable directed policies found", file=sys.stderr)
+        return 1
 
-    for chan_id, direction, capacity_sat, base in iter_directed_bases(graph):
-        if base is None:
-            ignored += 1
-            continue
-        bases.append(base)
+    hist = sorted(Counter(kept).items())
+    cdf = make_cdf(hist)
 
-    total_dirs = len(bases) + ignored
+    metrics = [type_metrics(n, cfg)
+               for n in sorted(cfg["channel_types"], reverse=True)]
+
     print("=" * 78)
     print("BOLT #1280 local resource conservation — mainnet bucket analysis")
     print("=" * 78)
-    print(f"Directed policies analyzed : {len(bases):,}")
-    print(f"Directed policies ignored  : {ignored:,} (no policy / no max_htlc_msat)")
-    print(f"Total directions considered: {total_dirs:,}")
-    print()
-    print("Protocol constants:")
-    print(f"  max_accepted_htlcs        = {MAX_ACCEPTED_HTLCS}")
-    print(f"  general slots ({GENERAL_FRAC:.0%})      = {GENERAL_SLOTS}")
-    print(f"  congestion slots ({CONGESTION_FRAC:.0%})   = {CONGESTION_SLOTS}")
-    print(f"  protected slots ({PROTECTED_FRAC:.0%})    = {PROTECTED_SLOTS}")
-    print(f"  general per-peer slots    = {GENERAL_SLOT_ALLOCATION} "
-          f"(= max(5, {GENERAL_SLOTS}*5/100))")
-    print("  Base value B per direction = the policy's max_htlc_msat")
+    print(f"Data: {os.path.basename(source)} — {len(kept):,} directed edges kept, "
+          f"{dropped:,} dropped (single-channel node or no max_htlc).")
+    print(f"Bucket split: general {cfg['general_pct']}%, "
+          f"congestion {cfg['congestion_pct']}%, "
+          f"protected {100 - cfg['general_pct'] - cfg['congestion_pct']}% "
+          f"(protected takes the remainder).")
+    print(f"Per-peer general allocation: max({cfg['min_slots']}, "
+          f"{cfg['alloc_pct']}% of general slots).")
     print()
 
-    # ------------------------------------------------------------------
-    # Price-independent distributions (base + bucket liquidity sizes).
-    # ------------------------------------------------------------------
-    print("-" * 78)
-    print("Base & bucket-liquidity distributions (price-independent)")
-    print("-" * 78)
-    print_summary_table("max_htlc_msat (base B), shown as sat",
-                         summarize(bases), fmt_sat)
-    print()
-    print_summary_table(f"General bucket liquidity ({GENERAL_FRAC:.0%} of B), sat",
-                         summarize([general_liquidity_msat(b) for b in bases]),
-                         fmt_sat)
-    print()
-    print_summary_table(f"Congestion bucket liquidity ({CONGESTION_FRAC:.0%} of B), sat",
-                         summarize([CONGESTION_FRAC * b for b in bases]),
-                         fmt_sat)
-    print()
-    print_summary_table("Congestion per-slot max HTLC threshold "
-                         f"(~B/{MAX_ACCEPTED_HTLCS}), sat",
-                         summarize([congestion_threshold_msat(b) for b in bases]),
-                         fmt_sat)
-    print()
-
-    # Headline: the most a single peer can ever hold in the general bucket,
-    # across all 9 of its per-peer slots. This is a liquidity cap, so it does
-    # not depend on payment size or BTC price.
-    peer_alloc_msat = [general_peer_liquidity_allocation_msat(b) for b in bases]
-    print_summary_table(
-        "Per-peer general liquidity allocation "
-        "(max one peer can hold, all slots), sat",
-        summarize(peer_alloc_msat), fmt_sat)
-    print()
-    print("  Same, expressed in USD at each price (key percentiles):")
-    alloc_sat_sorted = sorted(m / MSAT_PER_SAT for m in peer_alloc_msat)
-    header = "    {:<14}".format("percentile") + "".join(
-        f"${p//1000}k".rjust(14) for p in PRICES_USD)
-    print(header)
-    for label, q in (("p10", 10), ("p25", 25), ("p50", 50),
-                     ("p75", 75), ("p90", 90)):
-        sat = percentile(alloc_sat_sorted, q)
-        cells = "".join(
-            f"${sat / SAT_PER_BTC * price:,.2f}".rjust(14) for price in PRICES_USD)
-        print(f"    {label:<14}" + cells)
-    print()
-    decade_histogram(peer_alloc_msat,
-                     "Per-peer general liquidity allocation",
-                     to_display=lambda m: m / MSAT_PER_SAT)
-    print()
-
-    decade_histogram(bases, "max_htlc_msat distribution",
-                     to_display=lambda m: m / MSAT_PER_SAT)
-    print()
-
-    # ------------------------------------------------------------------
-    # Per-price analysis.
-    # ------------------------------------------------------------------
-    for price in PRICES_USD:
-        htlc_msat = htlc_msat_for_price(price)
-        htlc_sat = htlc_msat / MSAT_PER_SAT
-        print("=" * 78)
-        print(f"Price ${price:,}/BTC  →  ${PAYMENT_USD:g} payment = "
-              f"{fmt_int(htlc_sat)} sat ({htlc_msat:,.0f} msat)")
-        print("=" * 78)
-
-        # (1) Congestion fit.
-        n_fit = sum(1 for b in bases if congestion_fits(b, htlc_msat))
-        pct_fit = 100.0 * n_fit / len(bases) if bases else 0
-        print(f"(1) Congestion bucket: an average payment fits in "
-              f"{n_fit:,} / {len(bases):,} directions ({pct_fit:.1f}%).")
-        # Minimum base needed for the payment to fit.
-        min_base_sat = htlc_msat * CONGESTION_SLOTS / CONGESTION_FRAC / MSAT_PER_SAT
-        print(f"    (requires max_htlc_msat > {fmt_int(min_base_sat)} sat)")
-        print()
-
-        # (2) General bucket per-peer count.
-        peer_counts = [general_peer_htlc_count(b, htlc_msat) for b in bases]
-        whole_counts = [general_wholebucket_htlc_count(b, htlc_msat) for b in bases]
-        n_nonzero = sum(1 for c in peer_counts if c > 0)
-        pct_nonzero = 100.0 * n_nonzero / len(peer_counts) if peer_counts else 0
-        n_maxed = sum(1 for c in peer_counts if c == GENERAL_SLOT_ALLOCATION)
-        pct_maxed = 100.0 * n_maxed / len(peer_counts) if peer_counts else 0
-        print(f"(2) General bucket (per-peer): a single peer fits "
-              f"min({GENERAL_SLOT_ALLOCATION}, liq/htlc) average payments.")
-        print(f"    Directions where a peer fits >=1 payment : "
-              f"{n_nonzero:,} ({pct_nonzero:.1f}%)")
-        print(f"    Directions where a peer fits all "
-              f"{GENERAL_SLOT_ALLOCATION} slots : "
-              f"{n_maxed:,} ({pct_maxed:.1f}%)")
-        print_summary_table("Per-peer general HTLC count",
-                            summarize(peer_counts), fmt_int)
-        print()
-        integer_histogram(peer_counts, "Per-peer general HTLC count distribution",
-                          GENERAL_SLOT_ALLOCATION)
-        print()
-
-        # (3) Extra distribution: whole-bucket general count.
-        print_summary_table("Whole general-bucket HTLC count (context)",
-                            summarize(whole_counts), fmt_int)
-        print()
-
-        if csv_path:
-            for b in bases:
-                csv_rows.append({
-                    "price_usd": price,
-                    "max_htlc_msat": b,
-                    "htlc_msat": int(htlc_msat),
-                    "congestion_threshold_sat":
-                        round(congestion_threshold_msat(b) / MSAT_PER_SAT),
-                    "congestion_fits": int(congestion_fits(b, htlc_msat)),
-                    "general_peer_count": general_peer_htlc_count(b, htlc_msat),
-                    "general_wholebucket_count":
-                        general_wholebucket_htlc_count(b, htlc_msat),
-                })
+    print_metrics_table(metrics)
+    print_distribution_table("general", metrics, cdf,
+                             cfg["prices"], cfg["thresholds"])
+    print_distribution_table("congestion", metrics, cdf,
+                             cfg["prices"], cfg["thresholds"])
 
     if csv_path:
-        with open(csv_path, "w", newline="") as fh:
-            writer = csvmod.DictWriter(fh, fieldnames=list(csv_rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(csv_rows)
-        print(f"Wrote {len(csv_rows):,} rows to {csv_path}")
+        _write_csv(csv_path, metrics, cdf, cfg)
+    return 0
+
+
+def _write_csv(csv_path, metrics, cdf, cfg):
+    rows = []
+    for bucket, frac_key in (("general", "peer_general_frac"),
+                             ("congestion", "congestion_slot_frac")):
+        for m in metrics:
+            frac = m[frac_key]
+            for t in sorted(cfg["thresholds"]):
+                for p in sorted(cfg["prices"]):
+                    req = required_base_sat(t, p, frac)
+                    rows.append({
+                        "bucket": bucket,
+                        "max_accepted_htlcs": m["n"],
+                        "threshold_usd": t,
+                        "price_usd": p,
+                        "required_max_htlc_sat":
+                            "" if req == math.inf else math.ceil(req),
+                        "share": round(share_at_or_above(cdf, req), 6),
+                    })
+    with open(csv_path, "w", newline="") as fh:
+        writer = csvmod.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {len(rows):,} rows to {csv_path}")
+
+
+# --------------------------------------------------------------------------
+# Self-test: verify the ported math against the page's published defaults.
+# --------------------------------------------------------------------------
+
+def self_test():
+    # 40/20 split reproduces the page's 193/96/194, 45/22/47, 20/10/20 columns.
+    assert bucket_slots(483, 40, 20) == {"general": 193, "congestion": 96,
+                                         "protected": 194}
+    assert bucket_slots(114, 40, 20) == {"general": 45, "congestion": 22,
+                                         "protected": 47}
+    assert bucket_slots(50, 40, 20) == {"general": 20, "congestion": 10,
+                                        "protected": 20}
+    # Per-peer allocation k = 9 / 5 / 5.
+    assert per_peer_slots(193, 5, 5) == 9
+    assert per_peer_slots(45, 5, 5) == 5
+    assert per_peer_slots(20, 5, 5) == 5
+    # Bucket fractions (largest single HTLC as % of max_htlc).
+    assert abs(peer_general_frac(40, 193, 9) - 0.018653) < 1e-6      # 1.87%
+    assert abs(congestion_slot_frac(20, 96) - 0.0020833) < 1e-6      # 0.21%
+    assert abs(general_slot_frac(40, 20) - 0.02) < 1e-9              # 2.00%
+    # CDF share.
+    cdf = make_cdf([(100, 3), (200, 5), (300, 2)])
+    assert cdf[2] == 10                                              # total
+    assert share_at_or_above(cdf, 200) == 0.7                       # 7 of 10
+    assert share_at_or_above(cdf, 250) == 0.2                       # 2 of 10
+    assert share_at_or_above(cdf, math.inf) == 0.0
+    # Saturation is deterministic (seeded) and in the coupon-collector range.
+    sat = channels_to_saturate(193, 9, trials=200)
+    assert 100 < sat < 160, sat
+    print("analyze_buckets.py self-test: OK")
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "graph", nargs="?", default="mainnet.json",
-        help="Path to describegraph JSON (default: ./mainnet.json)")
-    parser.add_argument(
-        "--csv", metavar="PATH", default=None,
-        help="Optional path to dump per-direction rows for plotting")
-    parser.add_argument(
-        "--max-htlcs", type=int, default=MAX_ACCEPTED_HTLCS, metavar="N",
-        help="max_accepted_htlcs to assume per direction (default: 483)")
-    parser.add_argument(
-        "--general-frac", type=float, default=GENERAL_FRAC, metavar="F",
-        help="general bucket fraction of slots/liquidity (default: 0.40)")
-    parser.add_argument(
-        "--congestion-frac", type=float, default=CONGESTION_FRAC, metavar="F",
-        help="congestion bucket fraction of slots/liquidity (default: 0.20)")
+        help="describegraph JSON (default: ./mainnet.json)")
+    parser.add_argument("--csv", metavar="PATH", default=None,
+                        help="dump per-cell shares to CSV")
+    parser.add_argument("--self-test", action="store_true",
+                        help="check the ported math and exit")
+    parser.add_argument("--channel-types", type=int, nargs="+",
+                        default=[483, 114, 50], metavar="N",
+                        help="max_accepted_htlcs columns (default: 483 114 50)")
+    parser.add_argument("--general-pct", type=float, default=40, metavar="P",
+                        help="general bucket %% of slots/liquidity (default: 40)")
+    parser.add_argument("--congestion-pct", type=float, default=20, metavar="P",
+                        help="congestion bucket %% of slots/liquidity (default: 20)")
+    parser.add_argument("--min-slots", type=int, default=5, metavar="N",
+                        help="per-peer general slot floor (default: 5)")
+    parser.add_argument("--alloc-pct", type=float, default=5, metavar="P",
+                        help="per-peer general slot %% (default: 5)")
+    parser.add_argument("--prices", type=float, nargs="+",
+                        default=[50_000, 75_000, 100_000], metavar="USD",
+                        help="BTC prices (default: 50000 75000 100000)")
+    parser.add_argument("--thresholds", type=float, nargs="+",
+                        default=[1, 5, 10, 25, 50, 100, 250, 500], metavar="USD",
+                        help="dollar thresholds (default: 1 5 10 25 50 100 250 500)")
+    parser.add_argument("--saturation-trials", type=int, default=3000, metavar="N",
+                        help="Monte-Carlo trials for saturation (default: 3000)")
     args = parser.parse_args(argv)
 
-    set_bucket_params(args.max_htlcs, args.general_frac, args.congestion_frac)
+    if args.self_test:
+        self_test()
+        return 0
 
     if not os.path.exists(args.graph):
         parser.error(f"graph file not found: {args.graph}")
 
+    cfg = {
+        "channel_types": args.channel_types,
+        "general_pct": args.general_pct,
+        "congestion_pct": args.congestion_pct,
+        "min_slots": args.min_slots,
+        "alloc_pct": args.alloc_pct,
+        "prices": args.prices,
+        "thresholds": args.thresholds,
+        "trials": args.saturation_trials,
+    }
+
     with open(args.graph) as fh:
         graph = json.load(fh)
 
-    analyze(graph, csv_path=args.csv)
-    return 0
+    return analyze(graph, cfg, args.graph, csv_path=args.csv)
 
 
 if __name__ == "__main__":
