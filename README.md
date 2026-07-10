@@ -27,6 +27,17 @@ observable lower bound on `max_htlc_value_in_flight_msat`. Directed policies
 are kept only when the advertising node has more than one channel
 (single-channel nodes are assumed to be non-forwarding).
 
+## Screenshots
+
+The parameters panel and per-channel-type metrics table:
+
+![Explorer overview](page.png)
+
+The distribution table — share of mainnet edges able to carry a single HTLC of
+at least $X across BTC prices and channel types:
+
+![HTLC distribution table](htlc_table.png)
+
 ## Regenerate the data
 
 `data.js` is committed so the page works from a clone. To rebuild it from a
