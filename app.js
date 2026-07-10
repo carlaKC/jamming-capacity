@@ -80,7 +80,7 @@
     ["Channels to saturate general",
       (m) => (isFinite(m.saturate) ? "~" + fmtInt(m.saturate) : "n/a")],
     ["Liquidity per general slot", (m) => fmtPct(m.generalSlotFrac)],
-    ["Largest per-peer general HTLC", (m) => fmtPct(m.peerGeneralFrac)],
+    ["Largest HTLC per outgoing channel", (m) => fmtPct(m.peerGeneralFrac)],
     ["Largest congestion HTLC", (m) => fmtPct(m.congestionSlotFrac)],
   ];
 

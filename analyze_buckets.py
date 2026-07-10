@@ -201,7 +201,7 @@ METRIC_ROWS = [
     ("Channels to saturate general",
      lambda m: "~" + fmt_int(m["saturate"]) if math.isfinite(m["saturate"]) else "n/a"),
     ("Liquidity per general slot", lambda m: fmt_pct(m["general_slot_frac"])),
-    ("Largest per-peer general HTLC", lambda m: fmt_pct(m["peer_general_frac"])),
+    ("Largest HTLC per outgoing channel", lambda m: fmt_pct(m["peer_general_frac"])),
     ("Largest congestion HTLC", lambda m: fmt_pct(m["congestion_slot_frac"])),
 ]
 
@@ -210,11 +210,11 @@ def print_metrics_table(metrics, col=12):
     print("-" * 78)
     print("Per-channel-type metrics (max_accepted_htlcs)")
     print("-" * 78)
-    head = f"  {'Metric':<32}" + "".join(f"{fmt_int(m['n']) + ' slots':>{col}}"
+    head = f"  {'Metric':<34}" + "".join(f"{fmt_int(m['n']) + ' slots':>{col}}"
                                           for m in metrics)
     print(head)
     for label, value in METRIC_ROWS:
-        row = f"  {label:<32}" + "".join(f"{value(m):>{col}}" for m in metrics)
+        row = f"  {label:<34}" + "".join(f"{value(m):>{col}}" for m in metrics)
         print(row)
     print()
 
