@@ -122,6 +122,31 @@ button.small {
   color: var(--ink-2);
   cursor: pointer;
 }
+.value-list { display: flex; flex-direction: column; gap: 4px; }
+.value-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--page);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.value-remove {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.value-remove:hover { color: var(--error); }
+
 .derived-value {
   font-size: 13px;
   color: var(--muted);

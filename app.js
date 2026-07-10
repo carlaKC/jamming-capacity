@@ -288,34 +288,37 @@
     }
   }
 
-  // ---------------- removable value chips (prices, thresholds) ----------------
+  // ---------------- sorted value lists (prices, thresholds) ----------------
 
-  function renderValueChips(rootId, key, format, errId, keepMsg) {
+  function renderValueList(rootId, key, format, errId, keepMsg) {
     const root = $(rootId);
     root.replaceChildren();
     for (const v of [...state[key]].sort((a, b) => a - b)) {
-      const chip = el("button", "chip active", format(v));
-      chip.type = "button";
-      chip.appendChild(el("span", "x", "×"));
-      chip.addEventListener("click", () => {
+      const row = el("div", "value-row");
+      row.appendChild(el("span", "value-label", format(v)));
+      const remove = el("button", "value-remove", "×");
+      remove.type = "button";
+      remove.setAttribute("aria-label", "Remove " + format(v));
+      remove.addEventListener("click", () => {
         if (state[key].length === 1) {
           setError(errId, keepMsg);
           return;
         }
         state[key] = state[key].filter((x) => x !== v);
         setError(errId, null);
-        renderValueChips(rootId, key, format, errId, keepMsg);
+        renderValueList(rootId, key, format, errId, keepMsg);
         renderAll();
       });
-      root.appendChild(chip);
+      row.appendChild(remove);
+      root.appendChild(row);
     }
   }
 
-  const renderPriceChips = () =>
-    renderValueChips("price-chips", "prices", (p) => "$" + compactUsd(p),
+  const renderPriceList = () =>
+    renderValueList("price-list", "prices", fmtUsd,
       "price-error", "Keep at least one price.");
-  const renderThresholdChips = () =>
-    renderValueChips("threshold-chips", "thresholds", (t) => fmtUsd(t),
+  const renderThresholdList = () =>
+    renderValueList("threshold-list", "thresholds", fmtUsd,
       "threshold-error", "Keep at least one threshold.");
 
   // ---------------- add-value inputs ----------------
@@ -354,14 +357,14 @@
     (v) => (v > 0 ? null : "Enter a positive price."),
     (v) => {
       if (!state.prices.includes(v)) state.prices.push(v);
-      renderPriceChips();
+      renderPriceList();
     });
 
   bindAdd("threshold-add", "threshold-add-btn", "threshold-error",
     (v) => (v > 0 ? null : "Enter a positive dollar amount."),
     (v) => {
       if (!state.thresholds.includes(v)) state.thresholds.push(v);
-      renderThresholdChips();
+      renderThresholdList();
     });
 
   // ---------------- tabs ----------------
@@ -423,7 +426,7 @@
     " dropped (single-channel node or no max_htlc).";
 
   renderTypeChips();
-  renderPriceChips();
-  renderThresholdChips();
+  renderPriceList();
+  renderThresholdList();
   renderAll();
 })();
