@@ -4,9 +4,12 @@ Interactive explorer for the resource-bucket parameters proposed in
 [BOLT PR #1280](https://github.com/lightning/bolts/pull/1280) (local resource
 conservation), evaluated against the observed mainnet graph.
 
+**Live page: <https://carlakc.github.io/jamming-capacity/>**
+
 ## Run it
 
-Open `index.html` in a browser — no build step, no server needed.
+Try it in your browser at <https://carlakc.github.io/jamming-capacity/>, or run
+it locally: open `index.html` — no build step, no server needed.
 (`python3 -m http.server` works too if you prefer a URL.)
 
 ## What it shows
