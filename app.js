@@ -70,46 +70,41 @@
     return [...state.channelTypes].sort((a, b) => b - a).map(typeMetrics);
   }
 
-  // ---------------- rendering: metric cards ----------------
+  // ---------------- rendering: metrics comparison table ----------------
 
-  function statTile(label, value, note) {
-    const tile = el("div", "stat");
-    tile.appendChild(el("div", "stat-label", label));
-    tile.appendChild(el("div", "stat-value", value));
-    if (note) tile.appendChild(el("div", "stat-note", note));
-    return tile;
-  }
+  const METRIC_ROWS = [
+    ["General slots", (m) => String(m.slots.general)],
+    ["Congestion slots", (m) => String(m.slots.congestion)],
+    ["Protected slots", (m) => String(m.slots.protected)],
+    ["Per-peer general slots (k)", (m) => String(m.k)],
+    ["Channels to saturate general",
+      (m) => (isFinite(m.saturate) ? "~" + fmtInt(m.saturate) : "n/a")],
+    ["Liquidity per general slot", (m) => fmtPct(m.generalSlotFrac)],
+    ["Largest per-peer general HTLC", (m) => fmtPct(m.peerGeneralFrac)],
+    ["Largest congestion HTLC", (m) => fmtPct(m.congestionSlotFrac)],
+  ];
 
   function renderMetrics(metrics) {
-    const root = $("metrics");
-    root.replaceChildren();
+    const table = el("table");
+    const thead = el("thead");
+    const hr = el("tr");
+    hr.appendChild(el("th", "row-head", "Metric"));
     for (const m of metrics) {
-      const card = el("div", "metric-card");
-      card.appendChild(el("h3", null, fmtInt(m.maxAcceptedHtlcs) + " slot channel"));
-      const grid = el("div", "stat-grid");
-      grid.appendChild(statTile(
-        "Slots g / c / p",
-        m.slots.general + " / " + m.slots.congestion + " / " + m.slots.protected));
-      grid.appendChild(statTile("Per-peer general slots", String(m.k)));
-      grid.appendChild(statTile(
-        "Channels to saturate general",
-        isFinite(m.saturate) ? "~" + fmtInt(m.saturate) : "n/a",
-        "coupon-collector expectation"));
-      grid.appendChild(statTile(
-        "Liquidity per general slot",
-        fmtPct(m.generalSlotFrac),
-        "of max_htlc_value_in_flight"));
-      grid.appendChild(statTile(
-        "Max per-peer in general",
-        fmtPct(m.peerGeneralFrac),
-        "largest single HTLC"));
-      grid.appendChild(statTile(
-        "Congestion per slot",
-        fmtPct(m.congestionSlotFrac),
-        "largest congestion HTLC"));
-      card.appendChild(grid);
-      root.appendChild(card);
+      hr.appendChild(el("th", null, fmtInt(m.maxAcceptedHtlcs) + " slots"));
     }
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    const tbody = el("tbody");
+    for (const [label, value] of METRIC_ROWS) {
+      const tr = el("tr");
+      tr.appendChild(el("th", "row-head", label));
+      for (const m of metrics) tr.appendChild(el("td", null, value(m)));
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    const wrap = el("div", "table-wrap");
+    wrap.appendChild(table);
+    $("metrics").replaceChildren(wrap);
   }
 
   // ---------------- rendering: distribution table ----------------

@@ -158,24 +158,8 @@ button.small {
 .error { color: var(--error); font-size: 12px; margin: 6px 0 0; }
 .hidden { display: none; }
 
-/* ---- metric cards (stat tiles) ---- */
-#metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
-  margin-bottom: 18px;
-}
-.metric-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 14px 16px;
-}
-.metric-card h3 { margin: 0 0 10px; font-size: 14px; font-weight: 650; }
-.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
-.stat-label { font-size: 11px; color: var(--muted); letter-spacing: 0.02em; }
-.stat-value { font-size: 17px; font-weight: 600; }
-.stat-note { font-size: 11px; color: var(--muted); }
+/* ---- metrics comparison table ---- */
+#metrics { margin-bottom: 22px; }
 
 /* ---- tabs ---- */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--grid); margin-bottom: 10px; }
