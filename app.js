@@ -232,20 +232,11 @@
     state.generalPct = g;
     state.congestionPct = c;
     $("protected-pct").textContent = String(Math.round((100 - g - c) * 100) / 100);
-    $("split-preset").classList.toggle("active", g === 40 && c === 20);
     renderAll();
   }
 
   $("general-pct").addEventListener("input", onSplitInput);
   $("congestion-pct").addEventListener("input", onSplitInput);
-  $("split-preset").addEventListener("click", () => {
-    $("general-pct").value = "40";
-    $("congestion-pct").value = "20";
-    onSplitInput();
-  });
-  $("split-custom-toggle").addEventListener("click", () => {
-    $("split-custom").classList.toggle("hidden");
-  });
 
   // ---------------- per-peer allocation ----------------
 

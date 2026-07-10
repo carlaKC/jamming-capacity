@@ -24,16 +24,10 @@
   <aside id="params">
     <section class="param-group">
       <h2>Bucket split</h2>
-      <p class="hint">general / congestion / protected, % of slots &amp; liquidity</p>
-      <div class="chips">
-        <button type="button" class="chip active" id="split-preset">40 / 20 / 40</button>
-        <button type="button" class="chip secondary" id="split-custom-toggle">custom…</button>
-      </div>
-      <div class="custom-row hidden" id="split-custom">
-        <label>General % <input type="number" id="general-pct" value="40" min="0" max="100" step="1"></label>
-        <label>Congestion % <input type="number" id="congestion-pct" value="20" min="0" max="100" step="1"></label>
-        <p class="derived">Protected: <span id="protected-pct">40</span>% (remainder)</p>
-      </div>
+      <p class="hint">% of slots &amp; liquidity; protected takes the remainder</p>
+      <label>General % <input type="number" id="general-pct" value="40" min="0" max="100" step="1"></label>
+      <label>Congestion % <input type="number" id="congestion-pct" value="20" min="0" max="100" step="1"></label>
+      <label>Protected % <span class="derived-value" id="protected-pct">40</span></label>
       <p class="error hidden" id="split-error"></p>
     </section>
 

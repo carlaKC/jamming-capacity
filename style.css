@@ -122,8 +122,14 @@ button.small {
   color: var(--ink-2);
   cursor: pointer;
 }
-.custom-row.hidden { display: none; }
-.derived { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+.derived-value {
+  font-size: 13px;
+  color: var(--muted);
+  width: 90px;
+  padding: 4px 8px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
 .error { color: var(--error); font-size: 12px; margin: 6px 0 0; }
 .hidden { display: none; }
 
