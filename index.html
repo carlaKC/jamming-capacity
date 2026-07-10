@@ -9,15 +9,29 @@
 <body>
 <header>
   <h1>Channel jamming mitigation explorer</h1>
-  <p class="intro">
-    Interactive companion to the local resource conservation proposal
-    (<a href="https://github.com/lightning/bolts/pull/1280">BOLT PR&nbsp;#1280</a>):
-    a channel's incoming resources are split into general / congestion /
-    protected buckets, and each outgoing peer is limited to a slice of the
-    general bucket. Adjust the parameters to see the per-bucket restrictions
-    and the share of observed mainnet edges that can carry a single HTLC of a
-    given dollar size.
+  <p class="lead">
+    An interactive companion to
+    <a href="https://github.com/lightning/bolts/pull/1280">BOLT PR&nbsp;#1280</a>,
+    the local resource conservation proposal for mitigating channel jamming.
   </p>
+  <ul class="intro-points">
+    <li>
+      <strong>Split</strong>
+      A channel's incoming resources are divided into general, congestion
+      and protected buckets.
+    </li>
+    <li>
+      <strong>Limit</strong>
+      Each outgoing peer may only occupy a small slice of the general
+      bucket's slots and liquidity.
+    </li>
+    <li>
+      <strong>Explore</strong>
+      Tune the parameters to see the per-bucket restrictions, and the share
+      of observed mainnet edges that can carry a single HTLC of a given
+      dollar size.
+    </li>
+  </ul>
   <p class="provenance" id="provenance"></p>
 </header>
 <main>
