@@ -119,7 +119,9 @@
   function shadeCell(td, share) {
     const alpha = share * 0.92;
     td.style.background = "rgba(var(--cell-rgb), " + alpha.toFixed(3) + ")";
-    if (alpha > 0.55) td.classList.add("cell-dark");
+    // Deep-moss ramp: pale-mist text only once the fill is dark enough to
+    // carry it (~4.5:1 at 0.7 on the rice-paper surface).
+    if (alpha > 0.7) td.classList.add("cell-dark");
   }
 
   function renderTable(metrics) {
