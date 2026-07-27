@@ -14,6 +14,11 @@
   const state = {
     generalPct: 40,
     congestionPct: 20,
+    // Slots split by percentage of max_accepted_htlcs by default; "fixed"
+    // hard-sets the two counts instead.
+    slotMode: "pct",
+    generalSlotPct: 40,
+    congestionSlotPct: 20,
     generalSlots: 30,
     congestionSlots: 10,
     channelTypes: [483, 114, 50],
@@ -23,6 +28,7 @@
     thresholds: [1, 5, 10, 25, 50, 100, 250, 500],
     tab: "general",
     pctPrice: DEFAULT_PCT_PRICE,
+    pctType: 483,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -72,8 +78,14 @@
     return saturationCache.get(key);
   }
 
+  function slotsFor(n) {
+    return state.slotMode === "fixed"
+      ? M.bucketSlotsFixed(n, state.generalSlots, state.congestionSlots)
+      : M.bucketSlotsPct(n, state.generalSlotPct, state.congestionSlotPct);
+  }
+
   function typeMetrics(n) {
-    const slots = M.bucketSlots(n, state.generalSlots, state.congestionSlots);
+    const slots = slotsFor(n);
     const k = M.perPeerSlots(slots.general, state.minSlots, state.allocPct);
     return {
       maxAcceptedHtlcs: n,
@@ -83,26 +95,11 @@
       generalSlotFrac: M.generalSlotFrac(state.generalPct, slots.general),
       peerGeneralFrac: M.peerGeneralFrac(state.generalPct, slots.general, k),
       congestionSlotFrac: M.congestionSlotFrac(state.congestionPct, slots.congestion),
-      // A channel with fewer slots than general + congestion can't fund both.
-      squeezed: n < state.generalSlots + state.congestionSlots,
     };
   }
 
   function activeMetrics() {
     return [...state.channelTypes].sort((a, b) => b - a).map(typeMetrics);
-  }
-
-  // The three single-HTLC limits, as fractions of max_htlc_value_in_flight.
-  // Slots are fixed counts now, so these don't depend on the channel type —
-  // they hold for any channel with at least general + congestion slots.
-  function bucketFracs() {
-    const k = M.perPeerSlots(state.generalSlots, state.minSlots, state.allocPct);
-    return {
-      k,
-      generalSlot: M.generalSlotFrac(state.generalPct, state.generalSlots),
-      peerGeneral: M.peerGeneralFrac(state.generalPct, state.generalSlots, k),
-      congestionSlot: M.congestionSlotFrac(state.congestionPct, state.congestionSlots),
-    };
   }
 
   // The selected price, falling back to the median configured one when the
@@ -111,6 +108,14 @@
     if (state.prices.includes(state.pctPrice)) return state.pctPrice;
     const sorted = [...state.prices].sort((a, b) => a - b);
     return sorted[Math.floor((sorted.length - 1) / 2)];
+  }
+
+  // The percentile table shows one channel type at a time: under percentage
+  // slots the three limits scale with max_accepted_htlcs, so there is no
+  // single answer across types. Falls back to the largest active type.
+  function pctType() {
+    if (state.channelTypes.includes(state.pctType)) return state.pctType;
+    return Math.max(...state.channelTypes);
   }
 
   // ---------------- rendering: metrics comparison table ----------------
@@ -147,16 +152,7 @@
     table.appendChild(tbody);
     const wrap = el("div", "table-wrap");
     wrap.appendChild(table);
-    const nodes = [wrap];
-    const squeezed = metrics.filter((m) => m.squeezed);
-    if (squeezed.length) {
-      nodes.push(el("p", "hint",
-        "Channel types too small for " + state.generalSlots + " + " +
-        state.congestionSlots + " slots (" +
-        squeezed.map((m) => fmtInt(m.maxAcceptedHtlcs)).join(", ") +
-        ") fill general first, then congestion; protected is left empty."));
-    }
-    $("metrics").replaceChildren(...nodes);
+    $("metrics").replaceChildren(wrap);
   }
 
   // ---------------- rendering: distribution table ----------------
@@ -246,41 +242,55 @@
   // Inverse of the distribution table: instead of "what share of edges clear
   // $X", it asks "what can the edge at percentile P actually forward".
   const PCT_COLUMNS = [
-    ["One general slot", (f) => f.generalSlot],
-    ["All general slots", (f) => f.peerGeneral],
-    ["Congestion slot", (f) => f.congestionSlot],
+    ["One general slot", (m) => m.generalSlotFrac],
+    ["All general slots", (m) => m.peerGeneralFrac],
+    ["Congestion slot", (m) => m.congestionSlotFrac],
   ];
 
+  // A <select> for the percentile table's corner cell.
+  function cornerSelect(label, values, selected, format, onPick) {
+    const select = el("select", "corner-select");
+    select.setAttribute("aria-label", label);
+    for (const v of values) {
+      const opt = el("option", null, format(v));
+      opt.value = String(v);
+      if (v === selected) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener("change", () => {
+      onPick(Number(select.value));
+      renderPercentiles();
+    });
+    return select;
+  }
+
   function renderPercentiles() {
-    const fracs = bucketFracs();
     const price = pctPrice();
+    const type = pctType();
+    const m = typeMetrics(type);
 
     $("pct-caption").textContent =
       "Largest single HTLC each bucket admits for the edge at a given " +
       "max_htlc percentile, in USD. \"All general slots\" is one peer's " +
-      "allocation of k = " + fracs.k + " slots. Assumes a channel with at " +
-      "least " + (state.generalSlots + state.congestionSlots) +
-      " slots. Hover a cell for sat values.";
+      "allocation of k = " + m.k + " of the " + m.slots.general +
+      " general slots. Hover a cell for sat values.";
 
     const table = el("table");
     const thead = el("thead");
     const hr = el("tr");
 
-    // Corner cell doubles as the price selector.
+    // Corner cell holds the price and channel-type selectors.
     const corner = el("th", "row-head");
-    const select = el("select", "corner-select");
-    select.setAttribute("aria-label", "BTC price for the percentile table");
-    for (const p of [...state.prices].sort((a, b) => a - b)) {
-      const opt = el("option", null, "@ $" + compactUsd(p) + " / BTC");
-      opt.value = String(p);
-      if (p === price) opt.selected = true;
-      select.appendChild(opt);
-    }
-    select.addEventListener("change", () => {
-      state.pctPrice = Number(select.value);
-      renderPercentiles();
-    });
-    corner.appendChild(select);
+    corner.appendChild(cornerSelect(
+      "BTC price for the percentile table",
+      [...state.prices].sort((a, b) => a - b), price,
+      (p) => "@ $" + compactUsd(p) + " / BTC",
+      (p) => { state.pctPrice = p; }));
+    corner.appendChild(cornerSelect(
+      "Channel type for the percentile table",
+      [...state.channelTypes].sort((a, b) => b - a), type,
+      (n) => fmtInt(n) + " slots",
+      (n) => { state.pctType = n; }));
     hr.appendChild(corner);
 
     for (const [label] of PCT_COLUMNS) hr.appendChild(el("th", null, label));
@@ -293,7 +303,7 @@
       const tr = el("tr");
       tr.appendChild(el("th", "row-head", fmtPctile(p)));
       for (const [label, pick] of PCT_COLUMNS) {
-        const frac = pick(fracs);
+        const frac = pick(m);
         const td = el("td");
         if (!(frac > 0) || !isFinite(base)) {
           td.textContent = "n/a";
@@ -365,7 +375,39 @@
 
   // ---------------- bucket slots ----------------
 
-  function onSlotsInput() {
+  // Smallest channel type the fixed counts would have to fit inside, or null
+  // when they all have room. Percentage mode always fits.
+  function tooSmallForFixed(general, congestion, types) {
+    if (state.slotMode !== "fixed") return null;
+    const offenders = types.filter((n) => !M.slotsFitType(n, general, congestion));
+    return offenders.length ? offenders.sort((a, b) => a - b) : null;
+  }
+
+  function fixedFitMessage(offenders, general, congestion) {
+    return "General + congestion = " + (general + congestion) +
+      " slots, more than channel type" + (offenders.length > 1 ? "s " : " ") +
+      offenders.join(", ") + " can hold. Lower the counts or drop " +
+      (offenders.length > 1 ? "those types." : "that type.");
+  }
+
+  function onSlotsPctInput() {
+    const g = readNumber($("general-slot-pct"));
+    const c = readNumber($("congestion-slot-pct"));
+    const valid = g >= 0 && c >= 0 && g + c <= 100;
+    $("general-slot-pct").classList.toggle("invalid", !valid);
+    $("congestion-slot-pct").classList.toggle("invalid", !valid);
+    if (!valid) {
+      setError("slots-error", "General and congestion must each be ≥ 0 and sum to ≤ 100.");
+      return;
+    }
+    setError("slots-error", null);
+    state.generalSlotPct = g;
+    state.congestionSlotPct = c;
+    $("protected-slot-pct").textContent = String(Math.round((100 - g - c) * 100) / 100);
+    renderAll();
+  }
+
+  function onSlotsFixedInput() {
     const g = readNumber($("general-slots"));
     const c = readNumber($("congestion-slots"));
     const gOk = Number.isInteger(g) && g >= 0 && g <= 483;
@@ -377,14 +419,61 @@
         "Slot counts must be whole numbers between 0 and 483 (the BOLT 2 maximum).");
       return;
     }
+    const offenders = tooSmallForFixed(g, c, state.channelTypes);
+    if (offenders) {
+      $("general-slots").classList.add("invalid");
+      $("congestion-slots").classList.add("invalid");
+      setError("slots-error", fixedFitMessage(offenders, g, c));
+      return;
+    }
     setError("slots-error", null);
     state.generalSlots = g;
     state.congestionSlots = c;
     renderAll();
   }
 
-  $("general-slots").addEventListener("input", onSlotsInput);
-  $("congestion-slots").addEventListener("input", onSlotsInput);
+  $("general-slot-pct").addEventListener("input", onSlotsPctInput);
+  $("congestion-slot-pct").addEventListener("input", onSlotsPctInput);
+  $("general-slots").addEventListener("input", onSlotsFixedInput);
+  $("congestion-slots").addEventListener("input", onSlotsFixedInput);
+
+  // ---------------- slot mode toggle ----------------
+
+  const SLOT_HINTS = {
+    pct: "% of max_accepted_htlcs; protected takes the remainder",
+    fixed: "fixed counts, not scaled by channel size; protected takes the remainder",
+  };
+
+  function syncSlotModeUi() {
+    for (const btn of document.querySelectorAll(".mode[data-slot-mode]")) {
+      btn.classList.toggle("active", btn.dataset.slotMode === state.slotMode);
+    }
+    $("slots-hint").textContent = SLOT_HINTS[state.slotMode];
+    $("slots-pct-fields").classList.toggle("hidden", state.slotMode !== "pct");
+    $("slots-fixed-fields").classList.toggle("hidden", state.slotMode !== "fixed");
+  }
+
+  function setSlotMode(mode) {
+    const prev = state.slotMode;
+    state.slotMode = mode;
+    // Switching into fixed mode with counts that don't fit is refused rather
+    // than silently clamped; stay in the mode the user came from.
+    const offenders = tooSmallForFixed(
+      state.generalSlots, state.congestionSlots, state.channelTypes);
+    if (offenders) {
+      state.slotMode = prev;
+      setError("slots-error",
+        fixedFitMessage(offenders, state.generalSlots, state.congestionSlots));
+      return;
+    }
+    setError("slots-error", null);
+    syncSlotModeUi();
+    renderAll();
+  }
+
+  for (const btn of document.querySelectorAll(".mode[data-slot-mode]")) {
+    btn.addEventListener("click", () => setSlotMode(btn.dataset.slotMode));
+  }
 
   // ---------------- per-peer allocation ----------------
 
@@ -424,6 +513,15 @@
         if (active && state.channelTypes.length === 1) {
           setError("type-error", "Keep at least one channel type.");
           return;
+        }
+        if (!active) {
+          const offenders = tooSmallForFixed(
+            state.generalSlots, state.congestionSlots, [n]);
+          if (offenders) {
+            setError("type-error", fixedFitMessage(
+              offenders, state.generalSlots, state.congestionSlots));
+            return;
+          }
         }
         state.channelTypes = active
           ? state.channelTypes.filter((v) => v !== n)
@@ -493,9 +591,16 @@
   }
 
   bindAdd("type-add", "type-add-btn", "type-error",
-    (v) => (Number.isInteger(v) && v >= 1 && v <= 483
-      ? null
-      : "Enter a whole number of slots between 1 and 483 (the BOLT 2 maximum)."),
+    (v) => {
+      if (!(Number.isInteger(v) && v >= 1 && v <= 483)) {
+        return "Enter a whole number of slots between 1 and 483 (the BOLT 2 maximum).";
+      }
+      const offenders = tooSmallForFixed(
+        state.generalSlots, state.congestionSlots, [v]);
+      return offenders
+        ? fixedFitMessage(offenders, state.generalSlots, state.congestionSlots)
+        : null;
+    },
     (v) => {
       if (!state.channelTypes.includes(v)) state.channelTypes.push(v);
       renderTypeChips();
@@ -598,6 +703,7 @@
     fmtInt(DATA.directionsDropped) +
     " dropped (single-channel node or no max_htlc).";
 
+  syncSlotModeUi();
   renderTypeChips();
   renderPriceList();
   renderThresholdList();

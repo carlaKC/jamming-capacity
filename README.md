@@ -21,12 +21,22 @@ it locally: open `index.html` — no build step, no server needed.
   collector over the random slot assignment), and liquidity limits as a
   percentage of `max_htlc_value_in_flight_msat`.
 
-Slots and liquidity are divided differently. **Liquidity** is split by
-percentage (general / congestion, with protected taking the remainder), so each
-bucket's share scales with the channel. **Slots** are fixed counts — general
-gets 30 and congestion 10 by default, regardless of channel size, and protected
-takes whatever is left. A channel with fewer slots than the two fixed buckets
-need fills general first, then congestion, leaving protected empty.
+**Liquidity** is always split by percentage of `max_htlc_value_in_flight_msat`
+— general and congestion, with protected taking the remainder.
+
+**Slots** can be split either way, via the toggle beside the "Bucket slots"
+heading:
+
+- **`%`** (default) — a percentage of `max_accepted_htlcs`, so each bucket
+  scales with the channel. 40/20 gives the 193/96/194, 45/22/47 and 20/10/20
+  splits from the proposal.
+- **`fixed`** — hard-set counts that don't scale, 30 and 10 by default.
+  Protected takes whatever is left, so only it varies by channel type.
+
+Protected is derived in both modes and never editable. Fixed counts that
+wouldn't fit inside a selected channel type are refused rather than clamped:
+picking 30 + 10 with a 20-slot type in play raises an error on the page and
+exits non-zero on the command line.
 - **Distribution table**: share of mainnet directed edges able to carry a
   single HTLC of at least $X in the general bucket (per-peer liquidity
   allocation) or the congestion bucket (one slot's liquidity), across the BTC
@@ -34,7 +44,8 @@ need fills general first, then congestion, leaving protected empty.
 - **Channel percentile table**: the inverse question — what the edge at a
   given `max_htlc` percentile can actually forward, in dollars, through one
   general slot, a peer's whole general allocation (k slots), or a congestion
-  slot. The corner cell picks the BTC price; hover a cell for sat values.
+  slot. The corner cell picks the BTC price and the channel type; hover a cell
+  for sat values.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Directed policies
@@ -69,9 +80,10 @@ python3 analyze_buckets.py mainnet.json
 ```
 
 All the page's controls are flags (`--general-pct`, `--congestion-pct`,
+`--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--prices`, `--thresholds`, `--percentiles`,
-`--percentile-price`);
+`--percentile-price`, `--percentile-type`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above.
 

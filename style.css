@@ -121,6 +121,38 @@ main {
   margin: 0 0 4px;
   color: var(--ink);
 }
+
+/* Title row with a mode toggle sitting beside it. */
+.group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mode-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--stone);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  flex: none;
+}
+.mode {
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  padding: 3px 11px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 300ms ease;
+}
+.mode:hover { color: var(--ink); }
+.mode.active { background: var(--moss); color: var(--pale); }
+.mode:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(93, 112, 82, 0.35); }
 .hint { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
 
 label {
@@ -279,6 +311,7 @@ select.corner-select {
   cursor: pointer;
   transition: border-color 300ms ease, box-shadow 300ms ease;
 }
+select.corner-select + select.corner-select { margin-left: 6px; }
 select.corner-select:hover { border-color: var(--clay); }
 select.corner-select:focus-visible {
   outline: none;

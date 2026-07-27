@@ -33,10 +33,24 @@
     </section>
 
     <section class="param-group">
-      <h2>Bucket slots</h2>
-      <p class="hint">fixed counts, not scaled by channel size; protected takes the remainder</p>
-      <label>General slots <input type="number" id="general-slots" value="30" min="0" max="483" step="1"></label>
-      <label>Congestion slots <input type="number" id="congestion-slots" value="10" min="0" max="483" step="1"></label>
+      <div class="group-head">
+        <h2>Bucket slots</h2>
+        <div class="mode-toggle" role="group" aria-label="Slot allocation mode">
+          <button type="button" class="mode active" data-slot-mode="pct">%</button>
+          <button type="button" class="mode" data-slot-mode="fixed">fixed</button>
+        </div>
+      </div>
+      <p class="hint" id="slots-hint">% of max_accepted_htlcs; protected takes the remainder</p>
+      <div id="slots-pct-fields">
+        <label>General % <input type="number" id="general-slot-pct" value="40" min="0" max="100" step="1"></label>
+        <label>Congestion % <input type="number" id="congestion-slot-pct" value="20" min="0" max="100" step="1"></label>
+        <label>Protected % <span class="derived-value" id="protected-slot-pct">40</span></label>
+      </div>
+      <div id="slots-fixed-fields" class="hidden">
+        <label>General slots <input type="number" id="general-slots" value="30" min="0" max="483" step="1"></label>
+        <label>Congestion slots <input type="number" id="congestion-slots" value="10" min="0" max="483" step="1"></label>
+        <label>Protected slots <span class="derived-value" id="protected-slots">remainder</span></label>
+      </div>
       <p class="error hidden" id="slots-error"></p>
     </section>
 

@@ -11,19 +11,33 @@
 
   const SAT_PER_BTC = 100000000;
 
-  // Slots are allocated as fixed counts, not percentages: general and
-  // congestion take their configured number of slots and protected takes
-  // whatever is left, so the three buckets always sum to maxAcceptedHtlcs.
-  // Channels too small to fund both fixed buckets fill general first, then
-  // congestion, and protected is left empty.
-  function bucketSlots(maxAcceptedHtlcs, generalSlots, congestionSlots) {
-    const general = Math.min(generalSlots, maxAcceptedHtlcs);
-    const congestion = Math.min(congestionSlots, maxAcceptedHtlcs - general);
+  // Slots split by percentage of max_accepted_htlcs. Floor general and
+  // congestion; protected takes the remainder so the three buckets always sum
+  // to maxAcceptedHtlcs (matches restrictions.md's 193/96/194, 45/22/47,
+  // 20/10/20).
+  function bucketSlotsPct(maxAcceptedHtlcs, generalPct, congestionPct) {
+    const general = Math.floor((generalPct * maxAcceptedHtlcs) / 100);
+    const congestion = Math.floor((congestionPct * maxAcceptedHtlcs) / 100);
     return {
       general,
       congestion,
       protected: maxAcceptedHtlcs - general - congestion,
     };
+  }
+
+  // Slots hard-set to fixed counts, protected taking the remainder. Callers
+  // must reject generalSlots + congestionSlots > maxAcceptedHtlcs first;
+  // slotsFitType() is the check, and protected would otherwise go negative.
+  function bucketSlotsFixed(maxAcceptedHtlcs, generalSlots, congestionSlots) {
+    return {
+      general: generalSlots,
+      congestion: congestionSlots,
+      protected: maxAcceptedHtlcs - generalSlots - congestionSlots,
+    };
+  }
+
+  function slotsFitType(maxAcceptedHtlcs, generalSlots, congestionSlots) {
+    return generalSlots + congestionSlots <= maxAcceptedHtlcs;
   }
 
   // Per-peer general slot allocation: max(minSlots, floor(pct% of n)),
@@ -160,7 +174,9 @@
 
   return {
     SAT_PER_BTC,
-    bucketSlots,
+    bucketSlotsPct,
+    bucketSlotsFixed,
+    slotsFitType,
     perPeerSlots,
     generalSlotFrac,
     peerGeneralFrac,
