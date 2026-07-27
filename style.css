@@ -8,7 +8,9 @@
   --surface: #FEFEFA;
   --ink: #2C2C24;           /* deep loam */
   --ink-2: #4A4A40;         /* bark */
-  --muted: #78786C;         /* dried grass */
+  /* Dried grass, darkened from #78786C: captions and caveats are body copy,
+     and the lighter step sat at 4.35:1 on the page — under the 4.5:1 floor. */
+  --muted: #6B6B5F;
   --grid: #DED8CF;          /* raw timber */
   --border: rgba(222, 216, 207, 0.6);
   --moss: #5D7052;
@@ -554,12 +556,44 @@ body.dragging-cursor { cursor: ew-resize; user-select: none; }
 .ramp-step { width: 26px; height: 11px; border-radius: 2px; }
 
 .caveats {
-  margin: 20px 0 0;
-  padding-left: 20px;
-  font-size: 12.5px;
-  line-height: 1.65;
-  color: var(--muted);
-  max-width: 88ch;
+  margin: 12px 0 0;
+  padding-left: 22px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ink-2);
+  max-width: 78ch;
 }
 .caveats li { margin-bottom: 7px; }
 .caveats code { font-size: 11.5px; background: var(--stone); padding: 1px 5px; border-radius: 5px; }
+
+/* ---- section prose ---- */
+.section-intro {
+  max-width: 78ch;
+  margin: 0 0 18px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink-2);
+}
+.section-intro p { margin: 0 0 12px; }
+.section-intro strong { font-weight: 800; color: var(--ink); }
+.section-intro code, .caveats code {
+  font-size: 12.5px;
+  background: var(--stone);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+.method-head {
+  font-family: var(--serif);
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+  margin: 20px 0 8px;
+}
+.method-list {
+  margin: 0 0 12px;
+  padding-left: 22px;
+}
+.method-list li { margin-bottom: 9px; }
+.method-list strong { font-weight: 800; color: var(--ink); }
+.caveats strong { font-weight: 800; color: var(--ink-2); }

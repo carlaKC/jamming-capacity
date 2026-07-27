@@ -261,12 +261,12 @@
 
   function renderTable(metrics) {
     $("table-caption").textContent = state.tab === "general"
-      ? "Share of mainnet directed edges able to carry a single HTLC of at " +
-        "least $X in the general bucket (per-peer liquidity allocation: " +
-        "k slots' worth). Hover a cell for sat values."
-      : "Share of mainnet directed edges able to carry a single HTLC of at " +
-        "least $X in the congestion bucket (one slot's worth of liquidity). " +
-        "Hover a cell for sat values.";
+      ? "Showing the general bucket, where the limit is the whole per-peer " +
+        "allocation of k slots. Hover a cell for sat values; " +
+        "add or remove a threshold with the controls on each row."
+      : "Showing the congestion bucket, where the limit is one slot's worth " +
+        "of liquidity. Hover a cell for sat values; " +
+        "add or remove a threshold with the controls on each row.";
 
     const table = el("table");
     const thead = el("thead");
@@ -358,10 +358,10 @@
     const m = typeMetrics(type);
 
     $("pct-caption").textContent =
-      "Largest single HTLC each bucket admits for the edge at a given " +
-      "max_htlc percentile, in USD. \"All general slots\" is one peer's " +
-      "allocation of k = " + m.k + " of the " + m.slots.general +
-      " general slots. Hover a cell for sat values.";
+      "\"All general slots\" is one peer's allocation of k = " + m.k +
+      " of the " + m.slots.general + " general slots — not the whole bucket. " +
+      "Pick the BTC price and channel size in the corner; hover a cell for " +
+      "sat values.";
 
     const table = el("table");
     const thead = el("thead");

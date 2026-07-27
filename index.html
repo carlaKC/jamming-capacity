@@ -67,9 +67,32 @@
   <section id="results">
     <details class="result-section" open>
       <summary class="results-head">Channel statistics</summary>
+      <div class="section-intro">
+        <p>
+          The proposal splits every channel's incoming capacity into three
+          buckets. <strong>General</strong> is open to anyone, no reputation
+          needed — it is the bucket a stranger's payment lands in.
+          <strong>Congestion</strong> is a smaller reserve that opens up when
+          the channel is busy, and <strong>protected</strong> is held back for
+          peers that have built a reputation for resolving HTLCs honestly. A
+          channel has two things to divide this way: its
+          <code>max_accepted_htlcs</code> <em>slots</em>, and its
+          <code>max_htlc_value_in_flight</code> <em>liquidity</em>.
+        </p>
+        <p>
+          This table works out where those divisions land for channels of
+          different sizes. One column per channel size, so you can see which
+          numbers scale with the channel and which do not. The last three rows
+          are the ones that bite: they give the largest single payment each
+          bucket will admit, as a percentage of the channel's in-flight limit.
+          "Channels to saturate general" asks the attacker's question instead —
+          how many channels someone must open to occupy every general slot at
+          once, given that each peer is assigned its slots at random.
+        </p>
+      </div>
       <p class="table-caption">
-        Bucket metrics per channel type (max_accepted_htlcs). Liquidity values
-        are % of max_htlc_value_in_flight; saturation is the coupon-collector
+        Liquidity values are a percentage of
+        <code>max_htlc_value_in_flight</code>. Saturation is a coupon-collector
         expectation over the random per-peer slot assignment.
       </p>
       <div id="metrics"></div>
@@ -77,6 +100,26 @@
 
     <details class="result-section" open>
       <summary class="results-head">Channel distribution</summary>
+      <div class="section-intro">
+        <p>
+          Knowing a bucket admits, say, 1.87% of a channel's liquidity does not
+          tell you whether that is enough to be useful. This table answers the
+          practical version: pick a dollar amount, and it reports the share of
+          real mainnet channels that could carry a payment that size through
+          the chosen bucket.
+        </p>
+        <p>
+          Each directed channel advertises a <code>max_htlc</code>, the largest
+          single HTLC it will accept. The bucket lets a peer use some fraction
+          of that, so the channel clears a $X payment when
+          <code>max_htlc</code> × fraction ≥ $X. Every kept edge in the graph is
+          tested against that bar and the table reports how many pass. Rows are
+          the dollar thresholds, the outer columns are channel sizes, and the
+          inner columns are BTC prices — a payment is a fixed number of dollars
+          but a channel is a fixed number of sats, so the answer moves with the
+          price. Darker cells mean more of the network clears.
+        </p>
+      </div>
       <div class="tabs" role="tablist">
         <button type="button" class="tab active" data-tab="general">General bucket</button>
         <button type="button" class="tab" data-tab="congestion">Congestion bucket</button>
@@ -88,21 +131,104 @@
 
     <details class="result-section" open>
       <summary class="results-head">Channel percentiles</summary>
+      <div class="section-intro">
+        <p>
+          The same relationship read the other way round. Rather than fixing a
+          payment size and counting the channels that clear it, this fixes a
+          position in the network and reports what a channel there can actually
+          push through each bucket.
+        </p>
+        <p>
+          Rank every directed channel by its advertised <code>max_htlc</code>.
+          The 50th percentile is the median channel — half the network
+          advertises less, half more — and the 90th is a well-funded one. For
+          each of those, the columns give the largest single payment the bucket
+          admits, in dollars: through a single general slot, through the whole
+          allocation one peer gets, and through a congestion slot. It is the
+          quickest way to see whether a typical channel can move a useful
+          amount of money without reputation, or only pocket change.
+        </p>
+      </div>
       <p class="table-caption" id="pct-caption"></p>
       <div class="table-wrap" id="pct-wrap"></div>
     </details>
 
     <details class="result-section" open>
       <summary class="results-head">General-bucket routability</summary>
+      <div class="section-intro">
+        <p>
+          The three tables above look at one channel at a time. A payment does
+          not cross one channel — it crosses a route, and it fails if
+          <em>any</em> hop turns it away. This section follows that through, and
+          it is where the proposal's limits start to bite in a way the
+          per-channel view hides.
+        </p>
+        <p>
+          The question is narrow on purpose: how much payment traffic keeps
+          working with <em>no reputation at all</em>? Reputation has to be
+          earned, so a new node, a mobile wallet or anyone a routing node has
+          not seen before is relying on the general bucket alone. If the general
+          bucket cannot carry ordinary payments, those senders are pushed into
+          building reputation before they can transact.
+        </p>
+
+        <h3 class="method-head">How the numbers are worked out</h3>
+        <ol class="method-list">
+          <li>
+            <strong>One channel, one peer.</strong> The general bucket holds a
+            share of the channel's liquidity spread over its slots, and one
+            forwarding peer may occupy only <code>k</code> of those slots. That
+            gives the largest single payment that peer can push through
+            general: a fixed fraction of the channel's advertised
+            <code>max_htlc</code>.
+          </li>
+          <li>
+            <strong>One hop.</strong> Apply that fraction to every directed
+            channel in the graph and count the ones still large enough to carry
+            the payment. That share is the per-hop curve — the chance a single
+            randomly chosen hop lets the payment through.
+          </li>
+          <li>
+            <strong>A whole route.</strong> A route clears only if every hop on
+            it clears. Treating hops as independent draws, a route of
+            <code>h</code> hops clears with probability
+            <code>(per-hop)<sup>h</sup></code>. The main chart draws three hops,
+            roughly the average Lightning path; the heatmap sweeps one through
+            six.
+          </li>
+        </ol>
+
+        <p>
+          Two curves, then, and the shaded wedge between them is what composing
+          hops costs you. Because the per-hop share is a probability below one,
+          raising it to a power drives it down fast: a hop that clears 80% of
+          the time gives a three-hop route that clears about half the time.
+          That gap is the whole reason to look at routes rather than channels.
+        </p>
+        <p>
+          The weighting toggle changes what is being counted, and the two
+          answers differ enormously.
+          <strong>By count</strong> gives every directed channel one vote, which
+          answers "what share of channels can do this". <strong>By
+          liquidity</strong> weights each channel by the size it advertises,
+          which leans towards the well-funded channels a payment is more likely
+          to be routed over. Neither is the share of real
+          <em>payments</em> that succeed — that would need traffic data nobody
+          publishes — so the honest reading is that the truth sits somewhere
+          between the two, and the gap between them is a measure of how much the
+          answer depends on where in the network you look.
+        </p>
+      </div>
       <p class="table-caption" id="rout-caption"></p>
       <div id="rout-controls-slot"></div>
       <div id="rout-tiles"></div>
       <div id="rout-legend"></div>
       <div class="chart-card" id="rout-chart"></div>
       <p class="table-caption">
-        Routability by payment size and hop count. Darker means more of the
-        payment flow stays in the general bucket. The outlined column is the
-        selected payment size — drag across the squares to move it.
+        The same calculation at every hop count from one to six, so you can see
+        how quickly route length erodes what the general bucket can carry.
+        Darker means more of the flow stays in general. The outlined column is
+        the selected payment size — drag across the squares to move it.
       </p>
       <div id="rout-heat-legend"></div>
       <div class="chart-card" id="rout-heat"></div>
@@ -110,24 +236,29 @@
         <summary>Table view</summary>
         <div id="rout-table"></div>
       </details>
+      <h3 class="method-head">What this does not account for</h3>
       <ul class="caveats">
         <li>
-          Per-hop numbers overstate routability. The per-route curve is the
-          decision-relevant view, and it composes hops as independent events —
-          real routes correlate, since a payment picks well-funded channels, so
-          treat the route curve as a lower bound rather than an estimate.
+          <strong>Hops are not really independent.</strong> A payment is routed
+          deliberately, and pathfinding steers it towards well-funded channels
+          rather than sampling the graph at random. Raising the per-hop share to
+          a power therefore understates the truth, so read the route curve as a
+          lower bound rather than an estimate. Replacing it with sampled real
+          shortest paths would tighten the number without changing the shape.
         </li>
         <li>
-          The base value per edge is its advertised <code>max_htlc</code>, the
-          observable lower bound on <code>max_htlc_value_in_flight_msat</code>.
-          Gossip carries neither that field nor
-          <code>max_accepted_htlcs</code>, so the slot counts are assumptions,
-          not measurements, and every number here moves with them.
+          <strong>Two of the three inputs are assumptions.</strong> Gossip
+          publishes neither <code>max_htlc_value_in_flight</code> nor
+          <code>max_accepted_htlcs</code>, so this page stands in each
+          direction's advertised <code>max_htlc</code> for the first — the
+          observable lower bound on it — and takes the slot count from the
+          parameters above. Every figure here moves with those choices, which is
+          why they are controls rather than constants.
         </li>
         <li>
-          "% of edges" is not "% of payments" is not "% of liquidity". The
-          weighting toggle exists so the divergence is visible rather than
-          hidden behind one framing.
+          <strong>The graph is a snapshot of what nodes advertise</strong>, not
+          of what they will actually do. A channel can advertise a large
+          <code>max_htlc</code> and still have no liquidity on the side you need.
         </li>
       </ul>
     </details>

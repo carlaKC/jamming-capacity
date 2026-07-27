@@ -619,15 +619,16 @@
     const pts = curvePoints();
 
     $("rout-caption").textContent =
-      "Share of payments a channel's general bucket admits with no reputation, " +
-      "against payment size. One peer may push " +
-      (m.peerGeneralFrac * 100).toFixed(2) + "% of an edge's max_htlc (k = " +
-      m.k + " of " + m.slots.general + " general slots). Edges are weighted " +
-      (state.weighting === "value" ? "by advertised liquidity" : "one edge, one vote") +
-      "; the " + ROUTE_HOPS + "-hop curve composes the per-hop share " +
-      "multiplicatively. Set the payment size by typing it, or by dragging " +
-      "across either the chart or the heatmap. The shaded band is $" +
-      TYPICAL[0] + "–$" + TYPICAL[1] + ".";
+      "At these settings one peer may push " +
+      (m.peerGeneralFrac * 100).toFixed(2) + "% of a channel's max_htlc " +
+      "through general (k = " + m.k + " of " + m.slots.general +
+      " general slots), counting channels " +
+      (state.weighting === "value"
+        ? "weighted by advertised liquidity"
+        : "one edge, one vote") +
+      ". Set the payment size by typing it, or by dragging across the chart " +
+      "or the heatmap; the shaded band is $" + TYPICAL[0] + "–$" +
+      TYPICAL[1] + ", where everyday payments sit.";
 
     $("rout-controls-slot").replaceChildren(renderControls());
     $("rout-tiles").replaceChildren(renderTiles());
