@@ -453,7 +453,9 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
 .rout-controls {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  /* The labelled input is taller than the pills; bottom-align so the controls
+     sit on one line rather than the pills floating mid-field. */
+  align-items: flex-end;
   gap: 14px;
   margin-bottom: 16px;
 }
@@ -469,7 +471,7 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
   max-width: none;
 }
 .rout-field-label { font-variant-numeric: tabular-nums; }
-.rout-field input[type="range"] { width: 190px; accent-color: var(--moss); }
+.pay-input { width: 120px; }
 
 /* Readout tiles. Values use proportional figures at display size. */
 .tile-row {
@@ -524,7 +526,9 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
 }
 .chart-annot { font: 400 10.5px var(--sans); fill: var(--muted); }
 .chart-label { font: 800 12px var(--sans); }
-.hover-layer rect { cursor: crosshair; }
+/* The cursor line is a control: the whole plot is its grab area. */
+.chart-overlay { cursor: ew-resize; }
+body.dragging-cursor { cursor: ew-resize; user-select: none; }
 
 .chart-legend {
   display: flex;

@@ -438,16 +438,15 @@ def print_routability_table(cdf, cfg, metrics, col=9):
     n = cfg["percentile_type"]
     m = next(x for x in metrics if x["n"] == n)
     price = cfg["percentile_price"]
-    frac = m["peer_general_frac"] * cfg["oversub"]
+    frac = m["peer_general_frac"]
 
     print("-" * 78)
     print(f"General-bucket routability — {n}-slot channels")
     print("Share of payment flow clearing the general bucket with no reputation,")
     print(f"at ${price:,.0f}/BTC. One peer may push {frac * 100:.2f}% of an edge's "
           f"max_htlc")
-    print(f"(k = {m['k']} of {m['slots']['general']} general slots"
-          + (f", oversubscribed x{cfg['oversub']:g}" if cfg["oversub"] != 1 else "")
-          + "). Hops compose")
+    print(f"(k = {m['k']} of {m['slots']['general']} general slots). "
+          f"Hops compose")
     print("multiplicatively, so treat the multi-hop columns as a lower bound.")
     print("-" * 78)
 
@@ -687,9 +686,6 @@ def main(argv=None):
     parser.add_argument("--percentile-type", type=int, default=None, metavar="N",
                         help="channel type for the percentile and routability "
                              "tables (default: the largest --channel-types entry)")
-    parser.add_argument("--oversub", type=float, default=1.0, metavar="X",
-                        help="per-slot oversubscription over the backed share "
-                             "(default: 1.0)")
     parser.add_argument("--payments", type=float, nargs="+",
                         default=[0.1, 1, 5, 10, 50, 100, 500, 1000, 10000],
                         metavar="USD",
@@ -743,7 +739,6 @@ def main(argv=None):
         "thresholds": args.thresholds,
         "percentiles": args.percentiles,
         "percentile_price": args.percentile_price,
-        "oversub": args.oversub,
         "payments": args.payments,
         "trials": args.saturation_trials,
     }

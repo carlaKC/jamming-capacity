@@ -8,7 +8,7 @@
  * composes multiplicatively, so per *route* it falls off a cliff.
  *
  * All bucket math lives in math.js; this file owns the section's own state
- * (payment cursor, weighting, oversubscription, price, channel type) and its
+ * (payment cursor, weighting, price, channel type) and its
  * SVG rendering. app.js hands it the current bucket parameters on every
  * render.
  */
@@ -37,24 +37,27 @@
   const USD_MIN = 0.1;
   const USD_MAX = 10000;
   const DECADES = [0.1, 1, 10, 100, 1000, 10000];
-  // Where everyday Lightning payments actually sit.
-  const TYPICAL = [1, 100];
+  // Where everyday Lightning payments actually sit. Shaded, not labelled.
+  const TYPICAL = [10, 200];
   const ROUTE_HOPS = 3;
   const HEAT_HOPS = [1, 2, 3, 4, 5, 6];
   const HEAT_COLS = 25;          // half-decade-ish columns across the span
   const CURVE_POINTS = 160;
 
-  const SLIDER_MAX = 1000;
-  const sliderToUsd = (v) => USD_MIN * Math.pow(10, (v / SLIDER_MAX) * 5);
-  const usdToSlider = (u) =>
-    Math.round((Math.log10(u / USD_MIN) / 5) * SLIDER_MAX);
+  const clampUsd = (u) => Math.min(USD_MAX, Math.max(USD_MIN, u));
 
   const state = {
     payUsd: 50,
     weighting: "value",   // "value" (liquidity-weighted) | "count"
-    oversub: 1,
     price: 75000,
     type: 483,
+  };
+
+  // Live handles into the rendered SVG, so dragging the cursor can move it
+  // without rebuilding the whole section on every pointer event.
+  const refs = {
+    payInput: null, cursorLine: null, hopDot: null, routeDot: null,
+    heatBox: null, heatCellW: 0,
   };
 
   let M = null;
@@ -106,11 +109,9 @@
     });
   }
 
-  // The fraction of an edge's max_htlc one peer may push through general, with
-  // any per-slot oversubscription applied.
+  // The fraction of an edge's max_htlc one peer may push through general.
   function routableFrac() {
-    const m = params.typeMetrics(activeType());
-    return m.peerGeneralFrac * state.oversub;
+    return params.typeMetrics(activeType()).peerGeneralFrac;
   }
 
   function perHopAt(usd) {
@@ -176,12 +177,6 @@
       width: xOf(TYPICAL[1]) - xOf(TYPICAL[0]), height: PH,
       fill: "rgba(193, 140, 93, 0.07)",
     }));
-    // Sits at the foot of the band: the curves live along the top edge for
-    // small payments, so a label up there would collide with them.
-    node.appendChild(svg("text", {
-      x: (xOf(TYPICAL[0]) + xOf(TYPICAL[1])) / 2, y: PAD.top + PH - 8,
-      "text-anchor": "middle", class: "chart-annot",
-    }, "typical payments"));
 
     // Hairline grid + axes, solid, one shade off the surface.
     for (const share of [0, 0.25, 0.5, 0.75, 1]) {
@@ -235,37 +230,109 @@
       class: "chart-label", fill: SERIES.route,
     }, ROUTE_HOPS + "-hop route"));
 
-    // Cursor.
+    // Cursor. Draggable: the line is the payment-size control, mirrored by the
+    // input field above the chart.
     const cx = xOf(state.payUsd);
     const hop = perHopAt(state.payUsd);
     const route = M.routeRoutability(hop, ROUTE_HOPS);
-    node.appendChild(svg("line", {
+    refs.cursorLine = svg("line", {
       x1: cx, y1: PAD.top, x2: cx, y2: PAD.top + PH,
       stroke: AXIS_INK, "stroke-width": 1,
-    }));
-    for (const [share, fill] of [[hop, SERIES.hop], [route, SERIES.route]]) {
-      // 2px surface ring rather than a border, so overlapping dots separate.
-      node.appendChild(svg("circle", {
-        cx, cy: yOf(share), r: 5, fill, stroke: "#FEFEFA", "stroke-width": 2,
-      }));
-    }
+    });
+    node.appendChild(refs.cursorLine);
+    // 2px surface ring rather than a border, so overlapping dots separate.
+    refs.hopDot = svg("circle", {
+      cx, cy: yOf(hop), r: 5, fill: SERIES.hop,
+      stroke: "#FEFEFA", "stroke-width": 2,
+    });
+    refs.routeDot = svg("circle", {
+      cx, cy: yOf(route), r: 5, fill: SERIES.route,
+      stroke: "#FEFEFA", "stroke-width": 2,
+    });
+    node.append(refs.hopDot, refs.routeDot);
 
-    // Hover layer: one full-height band per sample, so the hit target is the
-    // column rather than the 2px line.
-    const hover = svg("g", { class: "hover-layer" });
-    const bandW = PW / CURVE_POINTS;
-    for (const p of pts) {
-      const band = svg("rect", {
-        x: xOf(p.usd) - bandW / 2, y: PAD.top, width: bandW, height: PH,
-        fill: "transparent",
-      });
-      band.addEventListener("pointerenter", (e) => showChartTip(p, e));
-      hover.appendChild(band);
-    }
-    node.appendChild(hover);
-    node.addEventListener("pointerleave", hideTip);
+    // One overlay across the plot handles both the crosshair tooltip and the
+    // drag, so the hit target is the whole plot rather than the 1px line.
+    const overlay = svg("rect", {
+      x: PAD.left, y: PAD.top, width: PW, height: PH,
+      fill: "transparent", class: "chart-overlay",
+    });
+    const usdAt = (clientX) => {
+      const box = node.getBoundingClientRect();
+      const px = ((clientX - box.left) / box.width) * CW;   // viewBox units
+      return clampUsd(USD_MIN * Math.pow(10, ((px - PAD.left) / PW) * 5));
+    };
+    const nearest = (usd) => {
+      const i = Math.round((Math.log10(usd / USD_MIN) / 5) * CURVE_POINTS);
+      return pts[Math.min(pts.length - 1, Math.max(0, i))];
+    };
+    overlay.addEventListener("pointermove", (e) => {
+      if (!dragging) showChartTip(nearest(usdAt(e.clientX)), e);
+    });
+    overlay.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      hideTip();
+      startDrag(usdAt);
+      setPayment(usdAt(e.clientX));
+    });
+    node.appendChild(overlay);
+    node.addEventListener("pointerleave", () => { if (!dragging) hideTip(); });
 
     return node;
+  }
+
+  // ---------------- payment cursor ----------------
+
+  let dragging = false;
+
+  // Listeners live on the document so the drag survives the pointer leaving
+  // the plot, and so re-rendering the SVG mid-drag cannot orphan them.
+  function startDrag(usdAt) {
+    dragging = true;
+    document.body.classList.add("dragging-cursor");
+    const move = (e) => setPayment(usdAt(e.clientX));
+    const end = () => {
+      dragging = false;
+      document.body.classList.remove("dragging-cursor");
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", end);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", end);
+  }
+
+  // Moves the cursor without rebuilding the section: the curves and the
+  // heatmap cells don't depend on the payment size, only the marks on top do.
+  function setPayment(usd) {
+    state.payUsd = clampUsd(usd);
+    const cx = xOf(state.payUsd);
+    const hop = perHopAt(state.payUsd);
+    const route = M.routeRoutability(hop, ROUTE_HOPS);
+    if (refs.cursorLine) {
+      refs.cursorLine.setAttribute("x1", cx);
+      refs.cursorLine.setAttribute("x2", cx);
+      refs.hopDot.setAttribute("cx", cx);
+      refs.hopDot.setAttribute("cy", yOf(hop));
+      refs.routeDot.setAttribute("cx", cx);
+      refs.routeDot.setAttribute("cy", yOf(route));
+    }
+    if (refs.heatBox) {
+      const ci = Math.round(
+        (Math.log10(state.payUsd / USD_MIN) / 5) * (HEAT_COLS - 1));
+      refs.heatBox.setAttribute("x",
+        HPAD.left + ci * refs.heatCellW - 2);
+    }
+    if (refs.payInput && document.activeElement !== refs.payInput) {
+      refs.payInput.value = roundForInput(state.payUsd);
+    }
+    $("rout-tiles").replaceChildren(renderTiles());
+  }
+
+  // Dragging lands on arbitrary reals; show something a person would type.
+  function roundForInput(usd) {
+    if (usd >= 100) return String(Math.round(usd));
+    if (usd >= 10) return String(Math.round(usd * 10) / 10);
+    return String(Math.round(usd * 100) / 100);
   }
 
   // ---------------- heatmap ----------------
@@ -319,12 +386,14 @@
 
     // Cursor column outline goes on last, so the cells don't cover it.
     const ci = Math.round((Math.log10(state.payUsd / USD_MIN) / 5) * (HEAT_COLS - 1));
-    node.appendChild(svg("rect", {
+    refs.heatCellW = cellW;
+    refs.heatBox = svg("rect", {
       x: HPAD.left + ci * cellW - 2, y: HPAD.top - 4,
       width: cellW + 4, height: HEAT_HOPS.length * HROW + 8,
       fill: "none", stroke: "#4A4A40", "stroke-width": 1.5, rx: 6,
       "pointer-events": "none",
-    }));
+    });
+    node.appendChild(refs.heatBox);
 
     for (const d of DECADES) {
       const frac = Math.log10(d / USD_MIN) / 5;
@@ -369,7 +438,7 @@
       el("div", "tt-line", "one hop: " + fmtPct1(p.hop)),
       el("div", "tt-line", ROUTE_HOPS + "-hop route: " + fmtPct1(p.route)),
       el("div", "tt-line",
-        "forced to reputation: " + fmtPct1(p.hop - p.route) + " of hops"),
+        "lost to composing hops: " + fmtPct1(p.hop - p.route)),
     );
     tooltipEl.classList.remove("hidden");
     place(e);
@@ -460,29 +529,21 @@
     }
     row.appendChild(toggle);
 
-    const pay = el("input");
-    pay.type = "range";
-    pay.min = "0";
-    pay.max = String(SLIDER_MAX);
+    const pay = el("input", "pay-input");
+    pay.type = "number";
+    pay.min = String(USD_MIN);
+    pay.max = String(USD_MAX);
     pay.step = "1";
-    pay.value = String(usdToSlider(state.payUsd));
+    pay.value = roundForInput(state.payUsd);
+    pay.setAttribute("aria-label", "Payment size in dollars");
     pay.addEventListener("input", () => {
-      state.payUsd = sliderToUsd(Number(pay.value));
-      render();
+      const v = parseFloat(pay.value);
+      const ok = Number.isFinite(v) && v >= USD_MIN && v <= USD_MAX;
+      pay.classList.toggle("invalid", !ok);
+      if (ok) setPayment(v);
     });
-    row.appendChild(field("Payment " + fmtUsd(state.payUsd), pay));
-
-    const over = el("input");
-    over.type = "range";
-    over.min = "50";
-    over.max = "400";
-    over.step = "10";
-    over.value = String(Math.round(state.oversub * 100));
-    over.addEventListener("input", () => {
-      state.oversub = Number(over.value) / 100;
-      render();
-    });
-    row.appendChild(field("Oversubscription ×" + state.oversub.toFixed(1), over));
+    refs.payInput = pay;
+    row.appendChild(field("Payment size (USD)", pay));
 
     return row;
   }
@@ -490,8 +551,7 @@
   // ---------------- tiles ----------------
 
   function renderTiles() {
-    const hop = perHopAt(state.payUsd);
-    const route = M.routeRoutability(hop, ROUTE_HOPS);
+    const route = M.routeRoutability(perHopAt(state.payUsd), ROUTE_HOPS);
     const v = verdictFor(route);
     const row = el("div", "tile-row");
 
@@ -504,9 +564,11 @@
       return t;
     };
 
-    row.appendChild(tile("Clears one hop", fmtPct1(hop), SERIES.hop));
+    // The per-hop figure is on the chart but not here: it overstates what a
+    // payment can actually do, so it makes a poor headline number.
     row.appendChild(tile("Clears a " + ROUTE_HOPS + "-hop route",
       fmtPct1(route), SERIES.route));
+    row.appendChild(tile("Needs reputation", fmtPct1(1 - route)));
 
     const verdict = el("div", "tile tile-verdict verdict-" + v.key);
     verdict.appendChild(el("div", "tile-label", "Verdict at " + fmtUsd(state.payUsd)));
@@ -531,12 +593,11 @@
       "Share of payments a channel's general bucket admits with no reputation, " +
       "against payment size. One peer may push " +
       (m.peerGeneralFrac * 100).toFixed(2) + "% of an edge's max_htlc (k = " +
-      m.k + " of " + m.slots.general + " general slots)" +
-      (state.oversub === 1 ? "" : ", oversubscribed ×" + state.oversub.toFixed(1)) +
-      ". Edges are weighted " +
+      m.k + " of " + m.slots.general + " general slots). Edges are weighted " +
       (state.weighting === "value" ? "by advertised liquidity" : "one edge, one vote") +
       "; the " + ROUTE_HOPS + "-hop curve composes the per-hop share " +
-      "multiplicatively.";
+      "multiplicatively. Drag the cursor line on the chart, or type a payment " +
+      "size. The shaded band is $" + TYPICAL[0] + "–$" + TYPICAL[1] + ".";
 
     $("rout-controls-slot").replaceChildren(renderControls());
     $("rout-tiles").replaceChildren(renderTiles());
@@ -563,7 +624,7 @@
     }
     const wedge = el("span", "legend-item");
     const ws = el("span", "legend-swatch legend-wedge");
-    wedge.append(ws, el("span", null, "forced to reputation"));
+    wedge.append(ws, el("span", null, "lost to composing hops"));
     wrap.appendChild(wedge);
     return wrap;
   }

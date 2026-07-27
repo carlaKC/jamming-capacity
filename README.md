@@ -60,9 +60,11 @@ exits non-zero on the command line.
   through the general bucket with no reputation, against payment size. Per
   *hop* the limits look survivable; a route only clears if every hop clears, so
   the per-*route* curve falls away far faster. The gap between the two curves —
-  shaded on the chart — is the flow pushed onto reputation. A heatmap sweeps
-  one to six hops, and the weighting toggle switches between counting edges and
-  weighting them by advertised liquidity.
+  shaded on the chart — is what composing hops costs you. A heatmap sweeps one
+  to six hops, and the weighting toggle switches between counting edges and
+  weighting them by advertised liquidity. Set the payment size by typing it or
+  by dragging the cursor line across the chart; the shaded band marks the
+  $10–$200 range where everyday payments sit.
 
 At the defaults, a $50 payment at $75k/BTC clears one hop 93.8% of the time
 weighted by liquidity but only 40.8% by edge count, and a three-hop route
@@ -109,7 +111,7 @@ All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--prices`, `--thresholds`, `--percentiles`,
-`--percentile-price`, `--percentile-type`, `--oversub`, `--payments`);
+`--percentile-price`, `--percentile-type`, `--payments`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above.
 
