@@ -12,33 +12,33 @@ function approx(a, b, tol, msg) {
   assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} !~ ${b}`); passed++;
 }
 
-// --- bucketSlots: floor general/congestion, remainder to protected.
-// Reproduces restrictions.md's tables exactly.
-eq(M.bucketSlots(483, 40, 20), { general: 193, congestion: 96, protected: 194 }, "483 split");
-eq(M.bucketSlots(114, 40, 20), { general: 45, congestion: 22, protected: 47 }, "114 split");
-eq(M.bucketSlots(50, 40, 20), { general: 20, congestion: 10, protected: 20 }, "50 split");
-eq(M.bucketSlots(110, 40, 20), { general: 44, congestion: 22, protected: 44 }, "exact when pct*N/100 is an integer");
+// --- bucketSlots: fixed general/congestion counts, remainder to protected.
+// Only protected scales with the channel's max_accepted_htlcs.
+eq(M.bucketSlots(483, 30, 10), { general: 30, congestion: 10, protected: 443 }, "483 split");
+eq(M.bucketSlots(114, 30, 10), { general: 30, congestion: 10, protected: 74 }, "114 split");
+eq(M.bucketSlots(50, 30, 10), { general: 30, congestion: 10, protected: 10 }, "50 split");
+eq(M.bucketSlots(40, 30, 10), { general: 30, congestion: 10, protected: 0 }, "exact fit leaves protected empty");
+// Channels too small for both fixed buckets fill general first, then congestion.
+eq(M.bucketSlots(35, 30, 10), { general: 30, congestion: 5, protected: 0 }, "partial congestion");
+eq(M.bucketSlots(20, 30, 10), { general: 20, congestion: 0, protected: 0 }, "general only");
 
 // --- perPeerSlots: k = min(n, max(minSlots, floor(pct*n/100)))
-eq(M.perPeerSlots(193, 5, 5), 9, "483 default k");
-eq(M.perPeerSlots(45, 5, 5), 5, "114 default k (min wins)");
-eq(M.perPeerSlots(20, 5, 5), 5, "50 default k (min wins)");
+eq(M.perPeerSlots(30, 5, 5), 5, "default k (5-slot floor beats 5% of 30)");
+eq(M.perPeerSlots(30, 5, 20), 6, "pct path");
 eq(M.perPeerSlots(4, 5, 5), 4, "k capped at n");
-eq(M.perPeerSlots(200, 5, 10), 20, "pct path");
+eq(M.perPeerSlots(200, 5, 10), 20, "pct path on a large general bucket");
 
 // --- liquidity fractions (of max_htlc_value_in_flight)
-approx(M.generalSlotFrac(40, 193), 0.4 / 193, 1e-12, "general per-slot 483 (~0.207%)");
-approx(M.peerGeneralFrac(40, 193, 9), (0.4 * 9) / 193, 1e-12, "483 largest general HTLC (~1.865%)");
-approx(M.generalSlotFrac(40, 20), 0.02, 1e-12, "50: 2% per slot");
-approx(M.peerGeneralFrac(40, 20, 5), 0.10, 1e-12, "50: 10% max per peer");
-approx(M.congestionSlotFrac(20, 96), 0.2 / 96, 1e-12, "483 congestion per slot (~0.208%)");
+approx(M.generalSlotFrac(40, 30), 0.4 / 30, 1e-12, "general per-slot (~1.333%)");
+approx(M.peerGeneralFrac(40, 30, 5), (0.4 * 5) / 30, 1e-12, "largest general HTLC (~6.667%)");
+approx(M.congestionSlotFrac(20, 10), 0.02, 1e-12, "congestion per slot (2%)");
 ok(Number.isNaN(M.generalSlotFrac(40, 0)), "0 general slots -> NaN");
 ok(Number.isNaN(M.congestionSlotFrac(20, 0)), "0 congestion slots -> NaN");
 
 // --- channelsToSaturate: MC coupon collector, deterministic seed
+between(M.channelsToSaturate(30, 5), 21, 25, "n=30 k=5 (default general bucket, ~23)");
 between(M.channelsToSaturate(45, 5), 36, 40, "n=45 k=5 (restrictions.md: 38)");
 between(M.channelsToSaturate(20, 5), 12, 15, "n=20 k=5 (restrictions.md: 13)");
-between(M.channelsToSaturate(193, 9), 118, 128, "n=193 k=9 (~123; NOT restrictions.md's 50)");
 eq(M.channelsToSaturate(10, 20), 1, "k >= n saturates in one channel");
 eq(M.channelsToSaturate(45, 5), M.channelsToSaturate(45, 5), "deterministic");
 ok(Number.isNaN(M.channelsToSaturate(0, 5)), "n=0 -> NaN");

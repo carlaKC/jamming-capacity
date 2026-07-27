@@ -11,12 +11,14 @@
 
   const SAT_PER_BTC = 100000000;
 
-  // Floor general and congestion; protected takes the remainder so the
-  // three buckets always sum to maxAcceptedHtlcs (matches restrictions.md's
-  // 193/96/194, 45/22/47, 20/10/20).
-  function bucketSlots(maxAcceptedHtlcs, generalPct, congestionPct) {
-    const general = Math.floor((generalPct * maxAcceptedHtlcs) / 100);
-    const congestion = Math.floor((congestionPct * maxAcceptedHtlcs) / 100);
+  // Slots are allocated as fixed counts, not percentages: general and
+  // congestion take their configured number of slots and protected takes
+  // whatever is left, so the three buckets always sum to maxAcceptedHtlcs.
+  // Channels too small to fund both fixed buckets fill general first, then
+  // congestion, and protected is left empty.
+  function bucketSlots(maxAcceptedHtlcs, generalSlots, congestionSlots) {
+    const general = Math.min(generalSlots, maxAcceptedHtlcs);
+    const congestion = Math.min(congestionSlots, maxAcceptedHtlcs - general);
     return {
       general,
       congestion,

@@ -40,14 +40,16 @@ MSAT_PER_SAT = 1_000
 
 # --------------------------------------------------------------------------
 # Pure bucket math — a faithful port of math.js so the numbers line up.
-# Buckets are expressed as *percentages* of max_accepted_htlcs / liquidity;
-# general and congestion floor, protected takes the remainder (matches the
-# page's 193/96/194, 45/22/47, 20/10/20 splits).
+# Liquidity is split by *percentage* of max_htlc_value_in_flight, but slots are
+# allocated as *fixed counts*: general and congestion take their configured
+# number of slots and protected takes the remainder.
 # --------------------------------------------------------------------------
 
-def bucket_slots(max_accepted_htlcs, general_pct, congestion_pct):
-    general = (general_pct * max_accepted_htlcs) // 100
-    congestion = (congestion_pct * max_accepted_htlcs) // 100
+def bucket_slots(max_accepted_htlcs, general_slots, congestion_slots):
+    """Fixed slot counts; protected takes the remainder. Channels too small to
+    fund both fixed buckets fill general first, then congestion."""
+    general = min(general_slots, max_accepted_htlcs)
+    congestion = min(congestion_slots, max_accepted_htlcs - general)
     return {
         "general": general,
         "congestion": congestion,
@@ -168,7 +170,7 @@ def share_at_or_above(cdf, required_sat):
 # --------------------------------------------------------------------------
 
 def type_metrics(n, cfg):
-    slots = bucket_slots(n, cfg["general_pct"], cfg["congestion_pct"])
+    slots = bucket_slots(n, cfg["general_slots"], cfg["congestion_slots"])
     k = per_peer_slots(slots["general"], cfg["min_slots"], cfg["alloc_pct"])
     saturate = (channels_to_saturate(slots["general"], k, cfg["trials"])
                 if slots["general"] > 0 and k > 0 else math.nan)
@@ -289,12 +291,21 @@ def analyze(graph, cfg, source, csv_path=None):
     print("=" * 78)
     print(f"Data: {os.path.basename(source)} — {len(kept):,} directed edges kept, "
           f"{dropped:,} dropped (single-channel node or no max_htlc).")
-    print(f"Bucket split: general {cfg['general_pct']}%, "
+    print(f"Bucket liquidity split: general {cfg['general_pct']}%, "
           f"congestion {cfg['congestion_pct']}%, "
           f"protected {100 - cfg['general_pct'] - cfg['congestion_pct']}% "
           f"(protected takes the remainder).")
+    print(f"Bucket slots: general {cfg['general_slots']}, "
+          f"congestion {cfg['congestion_slots']}, "
+          f"protected the remainder (fixed counts, not scaled by channel size).")
     print(f"Per-peer general allocation: max({cfg['min_slots']}, "
           f"{cfg['alloc_pct']}% of general slots).")
+    squeezed = [n for n in sorted(cfg["channel_types"], reverse=True)
+                if n < cfg["general_slots"] + cfg["congestion_slots"]]
+    if squeezed:
+        print(f"Note: channel types {', '.join(str(n) for n in squeezed)} are too "
+              f"small to fund both fixed buckets; they fill general first, then "
+              f"congestion, leaving protected empty.")
     print()
 
     print_metrics_table(metrics)
@@ -338,21 +349,26 @@ def _write_csv(csv_path, metrics, cdf, cfg):
 # --------------------------------------------------------------------------
 
 def self_test():
-    # 40/20 split reproduces the page's 193/96/194, 45/22/47, 20/10/20 columns.
-    assert bucket_slots(483, 40, 20) == {"general": 193, "congestion": 96,
-                                         "protected": 194}
-    assert bucket_slots(114, 40, 20) == {"general": 45, "congestion": 22,
-                                         "protected": 47}
-    assert bucket_slots(50, 40, 20) == {"general": 20, "congestion": 10,
-                                        "protected": 20}
-    # Per-peer allocation k = 9 / 5 / 5.
-    assert per_peer_slots(193, 5, 5) == 9
-    assert per_peer_slots(45, 5, 5) == 5
-    assert per_peer_slots(20, 5, 5) == 5
+    # Fixed 30/10 slots: only protected varies with channel size.
+    assert bucket_slots(483, 30, 10) == {"general": 30, "congestion": 10,
+                                         "protected": 443}
+    assert bucket_slots(114, 30, 10) == {"general": 30, "congestion": 10,
+                                         "protected": 74}
+    assert bucket_slots(50, 30, 10) == {"general": 30, "congestion": 10,
+                                        "protected": 10}
+    # Channels too small for both fixed buckets fill general, then congestion.
+    assert bucket_slots(35, 30, 10) == {"general": 30, "congestion": 5,
+                                        "protected": 0}
+    assert bucket_slots(20, 30, 10) == {"general": 20, "congestion": 0,
+                                        "protected": 0}
+    # Per-peer allocation: the 5-slot floor beats 5% of 30.
+    assert per_peer_slots(30, 5, 5) == 5
+    assert per_peer_slots(30, 5, 20) == 6
+    assert per_peer_slots(4, 5, 5) == 4
     # Bucket fractions (largest single HTLC as % of max_htlc).
-    assert abs(peer_general_frac(40, 193, 9) - 0.018653) < 1e-6      # 1.87%
-    assert abs(congestion_slot_frac(20, 96) - 0.0020833) < 1e-6      # 0.21%
-    assert abs(general_slot_frac(40, 20) - 0.02) < 1e-9              # 2.00%
+    assert abs(general_slot_frac(40, 30) - 0.0133333) < 1e-6         # 1.33%
+    assert abs(peer_general_frac(40, 30, 5) - 0.0666667) < 1e-6      # 6.67%
+    assert abs(congestion_slot_frac(20, 10) - 0.02) < 1e-9           # 2.00%
     # CDF share.
     cdf = make_cdf([(100, 3), (200, 5), (300, 2)])
     assert cdf[2] == 10                                              # total
@@ -360,8 +376,8 @@ def self_test():
     assert share_at_or_above(cdf, 250) == 0.2                       # 2 of 10
     assert share_at_or_above(cdf, math.inf) == 0.0
     # Saturation is deterministic (seeded) and in the coupon-collector range.
-    sat = channels_to_saturate(193, 9, trials=200)
-    assert 100 < sat < 160, sat
+    sat = channels_to_saturate(30, 5, trials=200)
+    assert 21 < sat < 25, sat
     print("analyze_buckets.py self-test: OK")
 
 
@@ -379,9 +395,13 @@ def main(argv=None):
                         default=[483, 114, 50], metavar="N",
                         help="max_accepted_htlcs columns (default: 483 114 50)")
     parser.add_argument("--general-pct", type=float, default=40, metavar="P",
-                        help="general bucket %% of slots/liquidity (default: 40)")
+                        help="general bucket %% of liquidity (default: 40)")
     parser.add_argument("--congestion-pct", type=float, default=20, metavar="P",
-                        help="congestion bucket %% of slots/liquidity (default: 20)")
+                        help="congestion bucket %% of liquidity (default: 20)")
+    parser.add_argument("--general-slots", type=int, default=30, metavar="N",
+                        help="general bucket slot count (default: 30)")
+    parser.add_argument("--congestion-slots", type=int, default=10, metavar="N",
+                        help="congestion bucket slot count (default: 10)")
     parser.add_argument("--min-slots", type=int, default=5, metavar="N",
                         help="per-peer general slot floor (default: 5)")
     parser.add_argument("--alloc-pct", type=float, default=5, metavar="P",
@@ -407,6 +427,8 @@ def main(argv=None):
         "channel_types": args.channel_types,
         "general_pct": args.general_pct,
         "congestion_pct": args.congestion_pct,
+        "general_slots": args.general_slots,
+        "congestion_slots": args.congestion_slots,
         "min_slots": args.min_slots,
         "alloc_pct": args.alloc_pct,
         "prices": args.prices,

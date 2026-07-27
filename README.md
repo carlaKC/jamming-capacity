@@ -20,6 +20,13 @@ it locally: open `index.html` — no build step, no server needed.
   of channels an attacker needs to saturate the general bucket (coupon
   collector over the random slot assignment), and liquidity limits as a
   percentage of `max_htlc_value_in_flight_msat`.
+
+Slots and liquidity are divided differently. **Liquidity** is split by
+percentage (general / congestion, with protected taking the remainder), so each
+bucket's share scales with the channel. **Slots** are fixed counts — general
+gets 30 and congestion 10 by default, regardless of channel size, and protected
+takes whatever is left. A channel with fewer slots than the two fixed buckets
+need fills general first, then congestion, leaving protected empty.
 - **Distribution table**: share of mainnet directed edges able to carry a
   single HTLC of at least $X in the general bucket (per-peer liquidity
   allocation) or the congestion bucket (one slot's liquidity), across the BTC
@@ -53,7 +60,8 @@ python3 analyze_buckets.py mainnet.json
 ```
 
 All the page's controls are flags (`--general-pct`, `--congestion-pct`,
-`--channel-types`, `--min-slots`, `--alloc-pct`, `--prices`, `--thresholds`);
+`--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
+`--alloc-pct`, `--prices`, `--thresholds`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above.
 

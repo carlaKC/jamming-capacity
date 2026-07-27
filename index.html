@@ -23,7 +23,8 @@
     <li>
       <strong>Split</strong>
       A channel's incoming resources are divided into general, congestion
-      and protected buckets.
+      and protected buckets — liquidity by percentage, slots by fixed
+      counts with protected taking the remainder.
     </li>
     <li>
       <strong>Limit</strong>
@@ -42,12 +43,20 @@
 <main>
   <aside id="params">
     <section class="param-group">
-      <h2>Bucket split</h2>
-      <p class="hint">% of slots &amp; liquidity; protected takes the remainder</p>
+      <h2>Bucket liquidity split</h2>
+      <p class="hint">% of liquidity; protected takes the remainder</p>
       <label>General % <input type="number" id="general-pct" value="40" min="0" max="100" step="1"></label>
       <label>Congestion % <input type="number" id="congestion-pct" value="20" min="0" max="100" step="1"></label>
       <label>Protected % <span class="derived-value" id="protected-pct">40</span></label>
       <p class="error hidden" id="split-error"></p>
+    </section>
+
+    <section class="param-group">
+      <h2>Bucket slots</h2>
+      <p class="hint">fixed counts, not scaled by channel size; protected takes the remainder</p>
+      <label>General slots <input type="number" id="general-slots" value="30" min="0" max="483" step="1"></label>
+      <label>Congestion slots <input type="number" id="congestion-slots" value="10" min="0" max="483" step="1"></label>
+      <p class="error hidden" id="slots-error"></p>
     </section>
 
     <section class="param-group">

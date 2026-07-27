@@ -12,6 +12,8 @@
   const state = {
     generalPct: 40,
     congestionPct: 20,
+    generalSlots: 30,
+    congestionSlots: 10,
     channelTypes: [483, 114, 50],
     minSlots: 5,
     allocPct: 5,
@@ -53,7 +55,7 @@
   }
 
   function typeMetrics(n) {
-    const slots = M.bucketSlots(n, state.generalPct, state.congestionPct);
+    const slots = M.bucketSlots(n, state.generalSlots, state.congestionSlots);
     const k = M.perPeerSlots(slots.general, state.minSlots, state.allocPct);
     return {
       maxAcceptedHtlcs: n,
@@ -63,6 +65,8 @@
       generalSlotFrac: M.generalSlotFrac(state.generalPct, slots.general),
       peerGeneralFrac: M.peerGeneralFrac(state.generalPct, slots.general, k),
       congestionSlotFrac: M.congestionSlotFrac(state.congestionPct, slots.congestion),
+      // A channel with fewer slots than general + congestion can't fund both.
+      squeezed: n < state.generalSlots + state.congestionSlots,
     };
   }
 
@@ -104,7 +108,16 @@
     table.appendChild(tbody);
     const wrap = el("div", "table-wrap");
     wrap.appendChild(table);
-    $("metrics").replaceChildren(wrap);
+    const nodes = [wrap];
+    const squeezed = metrics.filter((m) => m.squeezed);
+    if (squeezed.length) {
+      nodes.push(el("p", "hint",
+        "Channel types too small for " + state.generalSlots + " + " +
+        state.congestionSlots + " slots (" +
+        squeezed.map((m) => fmtInt(m.maxAcceptedHtlcs)).join(", ") +
+        ") fill general first, then congestion; protected is left empty."));
+    }
+    $("metrics").replaceChildren(...nodes);
   }
 
   // ---------------- rendering: distribution table ----------------
@@ -213,7 +226,7 @@
     }
   }
 
-  // ---------------- bucket split ----------------
+  // ---------------- bucket liquidity split ----------------
 
   function onSplitInput() {
     const g = readNumber($("general-pct"));
@@ -234,6 +247,29 @@
 
   $("general-pct").addEventListener("input", onSplitInput);
   $("congestion-pct").addEventListener("input", onSplitInput);
+
+  // ---------------- bucket slots ----------------
+
+  function onSlotsInput() {
+    const g = readNumber($("general-slots"));
+    const c = readNumber($("congestion-slots"));
+    const gOk = Number.isInteger(g) && g >= 0 && g <= 483;
+    const cOk = Number.isInteger(c) && c >= 0 && c <= 483;
+    $("general-slots").classList.toggle("invalid", !gOk);
+    $("congestion-slots").classList.toggle("invalid", !cOk);
+    if (!gOk || !cOk) {
+      setError("slots-error",
+        "Slot counts must be whole numbers between 0 and 483 (the BOLT 2 maximum).");
+      return;
+    }
+    setError("slots-error", null);
+    state.generalSlots = g;
+    state.congestionSlots = c;
+    renderAll();
+  }
+
+  $("general-slots").addEventListener("input", onSlotsInput);
+  $("congestion-slots").addEventListener("input", onSlotsInput);
 
   // ---------------- per-peer allocation ----------------
 
