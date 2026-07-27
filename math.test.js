@@ -46,6 +46,8 @@ ok(Number.isNaN(M.channelsToSaturate(45, 0)), "k=0 -> NaN");
 
 // --- conversions
 approx(M.usdToSat(10, 50000), 20000, 1e-6, "$10 @ $50k = 20,000 sat");
+approx(M.satToUsd(20000, 50000), 10, 1e-9, "20,000 sat @ $50k = $10");
+approx(M.satToUsd(M.usdToSat(37, 75000), 75000), 37, 1e-9, "round trip");
 approx(M.requiredBaseSat(10, 50000, 0.02), 1000000, 1e-4, "needs 1M sat base");
 eq(M.requiredBaseSat(10, 50000, 0), Infinity, "zero frac -> Infinity");
 eq(M.requiredBaseSat(10, 50000, NaN), Infinity, "NaN frac -> Infinity");
@@ -62,5 +64,19 @@ eq(M.shareAtOrAbove(cdf, 400), 0.25, "top value");
 eq(M.shareAtOrAbove(cdf, 401), 0, "nothing qualifies");
 eq(M.shareAtOrAbove(cdf, Infinity), 0, "Infinity -> 0");
 eq(M.shareAtOrAbove(M.makeCdf([]), 100), 0, "empty hist -> 0");
+
+// --- percentileSat: nearest rank over the same histogram.
+// [[100,3],[200,5],[300,2]] -> 100 100 100 200 200 200 200 200 300 300
+const pcdf = M.makeCdf([[100, 3], [200, 5], [300, 2]]);
+eq(M.percentileSat(pcdf, 0), 100, "p0 -> smallest");
+eq(M.percentileSat(pcdf, 10), 100, "p10 -> 1st value");
+eq(M.percentileSat(pcdf, 30), 100, "p30 -> 3rd value, still the minimum");
+eq(M.percentileSat(pcdf, 31), 200, "p31 -> 4th value");
+eq(M.percentileSat(pcdf, 50), 200, "p50 -> 5th value");
+eq(M.percentileSat(pcdf, 80), 200, "p80 -> 8th value");
+eq(M.percentileSat(pcdf, 81), 300, "p81 -> 9th value");
+eq(M.percentileSat(pcdf, 100), 300, "p100 -> largest");
+eq(M.percentileSat(M.makeCdf([[42, 7]]), 50), 42, "one distinct value -> that value");
+ok(Number.isNaN(M.percentileSat(M.makeCdf([]), 50)), "empty hist -> NaN");
 
 console.log(`math.test.js: ${passed} assertions passed`);

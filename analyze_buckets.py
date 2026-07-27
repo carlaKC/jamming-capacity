@@ -11,6 +11,9 @@ two tables it prints match what the page renders.
   2. The distribution table: the share of mainnet directed edges able to carry
      a single HTLC of at least $X in the general / congestion bucket, across
      the BTC prices and dollar thresholds you configure.
+  3. The channel percentile table: the inverse question — what the edge at a
+     given max_htlc percentile can actually forward, in dollars, through one
+     general slot, a peer's whole general allocation, or a congestion slot.
 
 Base value `B` per direction is the advertised `max_htlc_msat` (the observable
 lower bound on `max_htlc_value_in_flight_msat`), kept only when the advertising
@@ -134,6 +137,10 @@ def usd_to_sat(usd, price_usd_per_btc):
     return (usd / price_usd_per_btc) * SAT_PER_BTC
 
 
+def sat_to_usd(sat, price_usd_per_btc):
+    return (sat / SAT_PER_BTC) * price_usd_per_btc
+
+
 def required_base_sat(threshold_usd, price_usd_per_btc, frac):
     """Smallest max_htlc (sat) an edge needs so `frac` of it covers the threshold."""
     if not (frac > 0):
@@ -163,6 +170,25 @@ def share_at_or_above(cdf, required_sat):
         return 0.0
     lo = bisect.bisect_left(sats, required_sat)
     return suffix[lo] / total
+
+
+def percentile_sat(cdf, p):
+    """Nearest-rank percentile: smallest observed value at or below which at
+    least p% of the edges fall. p is 0..100."""
+    sats, suffix, total = cdf
+    n = len(sats)
+    if n == 0 or total <= 0:
+        return math.nan
+    rank = min(total, max(1, math.ceil(p / 100 * total)))
+    # count of edges <= sats[i] is total - suffix[i + 1], non-decreasing in i.
+    lo, hi = 0, n - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if total - suffix[mid + 1] >= rank:
+            hi = mid
+        else:
+            lo = mid + 1
+    return sats[lo]
 
 
 # --------------------------------------------------------------------------
@@ -271,6 +297,83 @@ def print_distribution_table(bucket, metrics, cdf, prices, thresholds, col=9):
 
 
 # --------------------------------------------------------------------------
+# Channel percentile table (mirrors app.js renderPercentiles): the inverse
+# question to the distribution table — instead of "what share of edges clear
+# $X", it asks what the edge at percentile P can actually forward.
+#
+# Slots are fixed counts, so the three limits below don't depend on the
+# channel type; they hold for any channel with at least general + congestion
+# slots.
+# --------------------------------------------------------------------------
+
+def bucket_fracs(cfg):
+    k = per_peer_slots(cfg["general_slots"], cfg["min_slots"], cfg["alloc_pct"])
+    return {
+        "k": k,
+        "general_slot": general_slot_frac(cfg["general_pct"], cfg["general_slots"]),
+        "peer_general": peer_general_frac(
+            cfg["general_pct"], cfg["general_slots"], k),
+        "congestion_slot": congestion_slot_frac(
+            cfg["congestion_pct"], cfg["congestion_slots"]),
+    }
+
+
+PCT_COLUMNS = [
+    ("One general slot", "general_slot"),
+    ("All general slots", "peer_general"),
+    ("Congestion slot", "congestion_slot"),
+]
+
+
+def _fmt_usd_cents(x):
+    # floor(x + 0.5) matches JS Math.round, so the page and this table agree
+    # to the cent (see fmtUsdCents in app.js).
+    return f"${math.floor(x * 100 + 0.5) / 100:,.2f}"
+
+
+def _fmt_pctile(p):
+    """10 -> '10th percentile', 21 -> '21st percentile' (mirrors app.js)."""
+    if p != int(p):
+        return f"{p:g}th percentile"
+    n = int(p)
+    if 11 <= abs(n) % 100 <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(abs(n) % 10, "th")
+    return f"{n}{suffix} percentile"
+
+
+def print_percentile_table(cdf, cfg, col=20, label_col=18):
+    fracs = bucket_fracs(cfg)
+    price = cfg["percentile_price"]
+    min_slots = cfg["general_slots"] + cfg["congestion_slots"]
+
+    print("-" * 78)
+    print("Channel percentiles")
+    print("Largest single HTLC each bucket admits for the edge at a given max_htlc")
+    print(f"percentile, in USD at ${price:,.0f}/BTC. 'All general slots' is one "
+          f"peer's")
+    print(f"allocation of k = {fracs['k']} slots. Assumes a channel with at least "
+          f"{min_slots} slots.")
+    print("-" * 78)
+
+    head = f"  {'':<{label_col}}" + "".join(f"{label:>{col}}"
+                                            for label, _ in PCT_COLUMNS)
+    print(head)
+    for p in cfg["percentiles"]:
+        base = percentile_sat(cdf, p)
+        row = f"  {_fmt_pctile(p):<{label_col}}"
+        for _, key in PCT_COLUMNS:
+            frac = fracs[key]
+            if not (frac > 0) or not math.isfinite(base):
+                row += f"{'n/a':>{col}}"
+            else:
+                row += f"{_fmt_usd_cents(sat_to_usd(base * frac, price)):>{col}}"
+        print(row)
+    print()
+
+
+# --------------------------------------------------------------------------
 # Main analysis.
 # --------------------------------------------------------------------------
 
@@ -313,6 +416,7 @@ def analyze(graph, cfg, source, csv_path=None):
                              cfg["prices"], cfg["thresholds"])
     print_distribution_table("congestion", metrics, cdf,
                              cfg["prices"], cfg["thresholds"])
+    print_percentile_table(cdf, cfg)
 
     if csv_path:
         _write_csv(csv_path, metrics, cdf, cfg)
@@ -375,6 +479,27 @@ def self_test():
     assert share_at_or_above(cdf, 200) == 0.7                       # 7 of 10
     assert share_at_or_above(cdf, 250) == 0.2                       # 2 of 10
     assert share_at_or_above(cdf, math.inf) == 0.0
+    # Nearest-rank percentiles over 100 100 100 200 200 200 200 200 300 300.
+    assert percentile_sat(cdf, 0) == 100
+    assert percentile_sat(cdf, 30) == 100
+    assert percentile_sat(cdf, 31) == 200
+    assert percentile_sat(cdf, 50) == 200
+    assert percentile_sat(cdf, 80) == 200
+    assert percentile_sat(cdf, 81) == 300
+    assert percentile_sat(cdf, 100) == 300
+    assert math.isnan(percentile_sat(make_cdf([]), 50))
+    # Ordinal row labels match app.js's fmtPctile.
+    assert _fmt_pctile(10) == "10th percentile"
+    assert _fmt_pctile(1) == "1st percentile"
+    assert _fmt_pctile(2) == "2nd percentile"
+    assert _fmt_pctile(3) == "3rd percentile"
+    assert _fmt_pctile(11) == "11th percentile"
+    assert _fmt_pctile(21) == "21st percentile"
+    assert _fmt_pctile(99) == "99th percentile"
+    assert _fmt_pctile(99.5) == "99.5th percentile"
+    # Conversions round trip.
+    assert abs(sat_to_usd(20_000, 50_000) - 10) < 1e-9
+    assert abs(sat_to_usd(usd_to_sat(37, 75_000), 75_000) - 37) < 1e-9
     # Saturation is deterministic (seeded) and in the coupon-collector range.
     sat = channels_to_saturate(30, 5, trials=200)
     assert 21 < sat < 25, sat
@@ -412,6 +537,12 @@ def main(argv=None):
     parser.add_argument("--thresholds", type=float, nargs="+",
                         default=[1, 5, 10, 25, 50, 100, 250, 500], metavar="USD",
                         help="dollar thresholds (default: 1 5 10 25 50 100 250 500)")
+    parser.add_argument("--percentiles", type=float, nargs="+",
+                        default=[10, 25, 50, 75, 90, 99], metavar="P",
+                        help="max_htlc percentile rows (default: 10 25 50 75 90 99)")
+    parser.add_argument("--percentile-price", type=float, default=75_000,
+                        metavar="USD",
+                        help="BTC price for the percentile table (default: 75000)")
     parser.add_argument("--saturation-trials", type=int, default=3000, metavar="N",
                         help="Monte-Carlo trials for saturation (default: 3000)")
     args = parser.parse_args(argv)
@@ -433,6 +564,8 @@ def main(argv=None):
         "alloc_pct": args.alloc_pct,
         "prices": args.prices,
         "thresholds": args.thresholds,
+        "percentiles": args.percentiles,
+        "percentile_price": args.percentile_price,
         "trials": args.saturation_trials,
     }
 

@@ -31,6 +31,10 @@ need fills general first, then congestion, leaving protected empty.
   single HTLC of at least $X in the general bucket (per-peer liquidity
   allocation) or the congestion bucket (one slot's liquidity), across the BTC
   prices you configure. Hover a cell for sat values.
+- **Channel percentile table**: the inverse question — what the edge at a
+  given `max_htlc` percentile can actually forward, in dollars, through one
+  general slot, a peer's whole general allocation (k slots), or a congestion
+  slot. The corner cell picks the BTC price; hover a cell for sat values.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Directed policies
@@ -48,12 +52,17 @@ at least $X across BTC prices and channel types:
 
 ![HTLC distribution table](htlc_table.png)
 
+The channel percentile table — what each bucket lets the edge at a given
+`max_htlc` percentile forward:
+
+![Channel percentile table](percentile_table.png)
+
 ## Reproduce the numbers on the command line
 
 `analyze_buckets.py` is the headless twin of the page: it runs the same bucket
-math over the same filtered graph and prints the two tables you see in the
-browser — the per-channel-type metrics and the distribution table. Point it at
-a `describegraph` dump:
+math over the same filtered graph and prints the three tables you see in the
+browser — the per-channel-type metrics, the distribution table and the channel
+percentiles. Point it at a `describegraph` dump:
 
 ```
 python3 analyze_buckets.py mainnet.json
@@ -61,7 +70,8 @@ python3 analyze_buckets.py mainnet.json
 
 All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
-`--alloc-pct`, `--prices`, `--thresholds`);
+`--alloc-pct`, `--prices`, `--thresholds`, `--percentiles`,
+`--percentile-price`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above.
 

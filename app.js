@@ -8,6 +8,8 @@
   const CDF = M.makeCdf(DATA.hist);
 
   const PRESET_TYPES = [483, 114, 50];
+  const PERCENTILES = [10, 25, 50, 75, 90, 99];
+  const DEFAULT_PCT_PRICE = 75000;
 
   const state = {
     generalPct: 40,
@@ -20,6 +22,7 @@
     prices: [50000, 75000, 100000],
     thresholds: [1, 5, 10, 25, 50, 100, 250, 500],
     tab: "general",
+    pctPrice: DEFAULT_PCT_PRICE,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -29,8 +32,23 @@
   const fmtInt = (x) => Math.round(x).toLocaleString("en-US");
   const fmtSat = (x) => fmtInt(x) + " sat";
   const fmtUsd = (x) => "$" + x.toLocaleString("en-US");
+  // Money to the cent — percentile cells span $0.66 to $13,200. Rounds to an
+  // integer number of cents first so analyze_buckets.py, which formats the
+  // same doubles in Python, lands on the same cent. Intl and Python's %.2f
+  // disagree on halfway-looking values such as 9.045.
+  const fmtUsdCents = (x) =>
+    "$" + (Math.round(x * 100) / 100).toLocaleString("en-US",
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtPct = (frac, digits) =>
     isFinite(frac) ? (frac * 100).toFixed(digits === undefined ? 2 : digits) + "%" : "n/a";
+  // 10 -> "10th", 21 -> "21st", 11 -> "11th".
+  function ordinal(n) {
+    if (!Number.isInteger(n)) return String(n) + "th";
+    const teen = Math.abs(n) % 100;
+    if (teen >= 11 && teen <= 13) return n + "th";
+    return n + (["th", "st", "nd", "rd"][Math.abs(n) % 10] || "th");
+  }
+  const fmtPctile = (p) => ordinal(p) + " percentile";
   const compactUsd = (x) =>
     x >= 1000
       ? (x / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }) + "k"
@@ -72,6 +90,27 @@
 
   function activeMetrics() {
     return [...state.channelTypes].sort((a, b) => b - a).map(typeMetrics);
+  }
+
+  // The three single-HTLC limits, as fractions of max_htlc_value_in_flight.
+  // Slots are fixed counts now, so these don't depend on the channel type —
+  // they hold for any channel with at least general + congestion slots.
+  function bucketFracs() {
+    const k = M.perPeerSlots(state.generalSlots, state.minSlots, state.allocPct);
+    return {
+      k,
+      generalSlot: M.generalSlotFrac(state.generalPct, state.generalSlots),
+      peerGeneral: M.peerGeneralFrac(state.generalPct, state.generalSlots, k),
+      congestionSlot: M.congestionSlotFrac(state.congestionPct, state.congestionSlots),
+    };
+  }
+
+  // The selected price, falling back to the median configured one when the
+  // selection has been removed from the sidebar list.
+  function pctPrice() {
+    if (state.prices.includes(state.pctPrice)) return state.pctPrice;
+    const sorted = [...state.prices].sort((a, b) => a - b);
+    return sorted[Math.floor((sorted.length - 1) / 2)];
   }
 
   // ---------------- rendering: metrics comparison table ----------------
@@ -202,10 +241,86 @@
     $("table-wrap").replaceChildren(table);
   }
 
+  // ---------------- rendering: channel percentile table ----------------
+
+  // Inverse of the distribution table: instead of "what share of edges clear
+  // $X", it asks "what can the edge at percentile P actually forward".
+  const PCT_COLUMNS = [
+    ["One general slot", (f) => f.generalSlot],
+    ["All general slots", (f) => f.peerGeneral],
+    ["Congestion slot", (f) => f.congestionSlot],
+  ];
+
+  function renderPercentiles() {
+    const fracs = bucketFracs();
+    const price = pctPrice();
+
+    $("pct-caption").textContent =
+      "Largest single HTLC each bucket admits for the edge at a given " +
+      "max_htlc percentile, in USD. \"All general slots\" is one peer's " +
+      "allocation of k = " + fracs.k + " slots. Assumes a channel with at " +
+      "least " + (state.generalSlots + state.congestionSlots) +
+      " slots. Hover a cell for sat values.";
+
+    const table = el("table");
+    const thead = el("thead");
+    const hr = el("tr");
+
+    // Corner cell doubles as the price selector.
+    const corner = el("th", "row-head");
+    const select = el("select", "corner-select");
+    select.setAttribute("aria-label", "BTC price for the percentile table");
+    for (const p of [...state.prices].sort((a, b) => a - b)) {
+      const opt = el("option", null, "@ $" + compactUsd(p) + " / BTC");
+      opt.value = String(p);
+      if (p === price) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener("change", () => {
+      state.pctPrice = Number(select.value);
+      renderPercentiles();
+    });
+    corner.appendChild(select);
+    hr.appendChild(corner);
+
+    for (const [label] of PCT_COLUMNS) hr.appendChild(el("th", null, label));
+    thead.appendChild(hr);
+    table.appendChild(thead);
+
+    const tbody = el("tbody");
+    for (const p of PERCENTILES) {
+      const base = M.percentileSat(CDF, p);
+      const tr = el("tr");
+      tr.appendChild(el("th", "row-head", fmtPctile(p)));
+      for (const [label, pick] of PCT_COLUMNS) {
+        const frac = pick(fracs);
+        const td = el("td");
+        if (!(frac > 0) || !isFinite(base)) {
+          td.textContent = "n/a";
+          td.classList.add("na");
+        } else {
+          const sat = base * frac;
+          td.textContent = fmtUsdCents(M.satToUsd(sat, price));
+          td.dataset.pctile = String(p);
+          td.dataset.bucket = label;
+          td.dataset.base = String(base);
+          td.dataset.sat = String(sat);
+          td.dataset.frac = String(frac);
+          td.dataset.price = String(price);
+        }
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    $("pct-wrap").replaceChildren(table);
+  }
+
   function renderAll() {
     const metrics = activeMetrics();
     renderMetrics(metrics);
     renderTable(metrics);
+    renderPercentiles();
   }
 
   // ---------------- validation helpers ----------------
@@ -420,6 +535,18 @@
     tooltip.classList.add("hidden");
   }
 
+  function placeTooltip(x, y) {
+    tooltip.classList.remove("hidden");
+    const pad = 14;
+    const rect = tooltip.getBoundingClientRect();
+    let left = x + pad;
+    let top = y + pad;
+    if (left + rect.width > window.innerWidth - 8) left = x - rect.width - pad;
+    if (top + rect.height > window.innerHeight - 8) top = y - rect.height - pad;
+    tooltip.style.left = left + "px";
+    tooltip.style.top = top + "px";
+  }
+
   function showTooltip(td, x, y) {
     const t = Number(td.dataset.threshold);
     const p = Number(td.dataset.price);
@@ -432,23 +559,36 @@
       el("div", "tt-line",
         fmtInt(share * CDF.total) + " of " + fmtInt(CDF.total) + " edges qualify"),
     );
-    tooltip.classList.remove("hidden");
-    const pad = 14;
-    const rect = tooltip.getBoundingClientRect();
-    let left = x + pad;
-    let top = y + pad;
-    if (left + rect.width > window.innerWidth - 8) left = x - rect.width - pad;
-    if (top + rect.height > window.innerHeight - 8) top = y - rect.height - pad;
-    tooltip.style.left = left + "px";
-    tooltip.style.top = top + "px";
+    placeTooltip(x, y);
   }
 
-  $("table-wrap").addEventListener("pointermove", (e) => {
-    const td = e.target.closest("td[data-price]");
-    if (td) showTooltip(td, e.clientX, e.clientY);
-    else hideTooltip();
-  });
-  $("table-wrap").addEventListener("pointerleave", hideTooltip);
+  function showPctTooltip(td, x, y) {
+    const d = td.dataset;
+    const base = Number(d.base);
+    const sat = Number(d.sat);
+    const price = Number(d.price);
+    tooltip.replaceChildren(
+      el("div", "tt-value", fmtSat(Math.floor(sat))),
+      el("div", "tt-line", d.bucket.toLowerCase() + " — " +
+        fmtPct(Number(d.frac)) + " of max_htlc"),
+      el("div", "tt-line",
+        fmtPctile(Number(d.pctile)) + " edge advertises " + fmtSat(base)),
+      el("div", "tt-line", "at $" + price.toLocaleString("en-US") + " / BTC"),
+    );
+    placeTooltip(x, y);
+  }
+
+  function bindTooltip(wrapId, selector, show) {
+    $(wrapId).addEventListener("pointermove", (e) => {
+      const td = e.target.closest(selector);
+      if (td) show(td, e.clientX, e.clientY);
+      else hideTooltip();
+    });
+    $(wrapId).addEventListener("pointerleave", hideTooltip);
+  }
+
+  bindTooltip("table-wrap", "td[data-price]", showTooltip);
+  bindTooltip("pct-wrap", "td[data-sat]", showPctTooltip);
 
   // ---------------- boot ----------------
 
