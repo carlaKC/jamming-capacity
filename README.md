@@ -63,7 +63,7 @@ exits non-zero on the command line.
   shaded on the chart — is what composing hops costs you. A heatmap sweeps one
   to six hops, and the weighting toggle switches between counting edges and
   weighting them by advertised liquidity. Set the payment size by typing it or
-  by dragging the cursor line across the chart; the shaded band marks the
+  by dragging across either the chart or the heatmap; the shaded band marks the
   $10–$200 range where everyday payments sit.
 
 At the defaults, a $50 payment at $75k/BTC clears one hop 93.8% of the time

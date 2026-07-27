@@ -124,12 +124,9 @@
   // Reserved status states, always shipped with a glyph and a word so the
   // reading never rests on colour alone.
   const VERDICTS = [
-    { min: 0.6, key: "good", glyph: "●", label: "flows in general",
-      note: "most routes clear without reputation" },
-    { min: 0.2, key: "warning", glyph: "◐", label: "partly reputation-gated",
-      note: "a large minority of routes need reputation" },
-    { min: 0, key: "critical", glyph: "▲", label: "mostly needs reputation",
-      note: "the general bucket rarely carries a whole route" },
+    { min: 0.6, key: "good", glyph: "●", label: "flows in general" },
+    { min: 0.2, key: "warning", glyph: "◐", label: "partly reputation-gated" },
+    { min: 0, key: "critical", glyph: "▲", label: "mostly needs reputation" },
   ];
   const verdictFor = (routeShare) => VERDICTS.find((v) => routeShare >= v.min);
 
@@ -317,10 +314,8 @@
       refs.routeDot.setAttribute("cy", yOf(route));
     }
     if (refs.heatBox) {
-      const ci = Math.round(
-        (Math.log10(state.payUsd / USD_MIN) / 5) * (HEAT_COLS - 1));
       refs.heatBox.setAttribute("x",
-        HPAD.left + ci * refs.heatCellW - 2);
+        HPAD.left + heatIndex(state.payUsd) * refs.heatCellW - 2);
     }
     if (refs.payInput && document.activeElement !== refs.payInput) {
       refs.payInput.value = roundForInput(state.payUsd);
@@ -340,10 +335,17 @@
   const rampIndex = (share) => Math.min(RAMP.length - 1,
     Math.max(0, Math.floor(share * RAMP.length)));
 
+  // Each column is a bin covering an equal slice of the log axis, represented
+  // by the payment size at its midpoint. Indexing by i/(HEAT_COLS-1) instead
+  // would drift the cells off the axis labels by up to a cell at the far end.
+  const heatFrac = (i) => (i + 0.5) / HEAT_COLS;
+  const heatIndex = (usd) => Math.min(HEAT_COLS - 1, Math.max(0,
+    Math.floor((Math.log10(usd / USD_MIN) / 5) * HEAT_COLS)));
+
   function heatColumns() {
     const cols = [];
     for (let i = 0; i < HEAT_COLS; i++) {
-      const usd = USD_MIN * Math.pow(10, (i / (HEAT_COLS - 1)) * 5);
+      const usd = USD_MIN * Math.pow(10, heatFrac(i) * 5);
       cols.push({ usd, hop: perHopAt(usd) });
     }
     return cols;
@@ -373,27 +375,53 @@
       cols.forEach((c, i) => {
         const share = M.routeRoutability(c.hop, h);
         // 2px surface gap between cells instead of a border.
-        const cell = svg("rect", {
+        node.appendChild(svg("rect", {
           x: HPAD.left + i * cellW + 1, y: y + 1,
           width: Math.max(1, cellW - 2), height: HROW - 2,
           fill: RAMP[rampIndex(share)], rx: 3,
-        });
-        cell.addEventListener("pointerenter", (e) =>
-          showHeatTip(c.usd, h, share, e));
-        node.appendChild(cell);
+        }));
       });
     });
 
     // Cursor column outline goes on last, so the cells don't cover it.
-    const ci = Math.round((Math.log10(state.payUsd / USD_MIN) / 5) * (HEAT_COLS - 1));
     refs.heatCellW = cellW;
     refs.heatBox = svg("rect", {
-      x: HPAD.left + ci * cellW - 2, y: HPAD.top - 4,
+      x: HPAD.left + heatIndex(state.payUsd) * cellW - 2, y: HPAD.top - 4,
       width: cellW + 4, height: HEAT_HOPS.length * HROW + 8,
       fill: "none", stroke: "#4A4A40", "stroke-width": 1.5, rx: 6,
       "pointer-events": "none",
     });
     node.appendChild(refs.heatBox);
+
+    // One overlay across the grid, as on the chart: it carries both the
+    // per-cell tooltip and the drag, so the payment size can be swept here too.
+    const gridH = HEAT_HOPS.length * HROW;
+    const overlay = svg("rect", {
+      x: HPAD.left, y: HPAD.top, width: plotW, height: gridH,
+      fill: "transparent", class: "chart-overlay",
+    });
+    const usdAt = (clientX) => {
+      const box = node.getBoundingClientRect();
+      const px = ((clientX - box.left) / box.width) * HW;   // viewBox units
+      return clampUsd(USD_MIN * Math.pow(10, ((px - HPAD.left) / plotW) * 5));
+    };
+    overlay.addEventListener("pointermove", (e) => {
+      if (dragging) return;
+      const box = node.getBoundingClientRect();
+      const py = ((e.clientY - box.top) / box.height) * height;
+      const r = Math.min(HEAT_HOPS.length - 1,
+        Math.max(0, Math.floor((py - HPAD.top) / HROW)));
+      const c = cols[heatIndex(usdAt(e.clientX))];
+      showHeatTip(c.usd, HEAT_HOPS[r],
+        M.routeRoutability(c.hop, HEAT_HOPS[r]), e);
+    });
+    overlay.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      hideTip();
+      startDrag(usdAt);
+      setPayment(usdAt(e.clientX));
+    });
+    node.appendChild(overlay);
 
     for (const d of DECADES) {
       const frac = Math.log10(d / USD_MIN) / 5;
@@ -402,7 +430,7 @@
         "text-anchor": "middle", class: "chart-tick",
       }, fmtUsd(d)));
     }
-    node.addEventListener("pointerleave", hideTip);
+    node.addEventListener("pointerleave", () => { if (!dragging) hideTip(); });
     return node;
   }
 
@@ -551,7 +579,8 @@
   // ---------------- tiles ----------------
 
   function renderTiles() {
-    const route = M.routeRoutability(perHopAt(state.payUsd), ROUTE_HOPS);
+    const hop = perHopAt(state.payUsd);
+    const route = M.routeRoutability(hop, ROUTE_HOPS);
     const v = verdictFor(route);
     const row = el("div", "tile-row");
 
@@ -564,11 +593,9 @@
       return t;
     };
 
-    // The per-hop figure is on the chart but not here: it overstates what a
-    // payment can actually do, so it makes a poor headline number.
+    row.appendChild(tile("Clears one hop", fmtPct1(hop), SERIES.hop));
     row.appendChild(tile("Clears a " + ROUTE_HOPS + "-hop route",
       fmtPct1(route), SERIES.route));
-    row.appendChild(tile("Needs reputation", fmtPct1(1 - route)));
 
     const verdict = el("div", "tile tile-verdict verdict-" + v.key);
     verdict.appendChild(el("div", "tile-label", "Verdict at " + fmtUsd(state.payUsd)));
@@ -576,7 +603,9 @@
     line.appendChild(el("span", "verdict-glyph", v.glyph));
     line.appendChild(el("span", "verdict-label", v.label));
     verdict.appendChild(line);
-    verdict.appendChild(el("div", "tile-note", v.note));
+    // The complement of the route figure, stated rather than characterised.
+    verdict.appendChild(el("div", "tile-note",
+      fmtPct1(1 - route) + " of " + ROUTE_HOPS + "-hop routes need reputation"));
     row.appendChild(verdict);
 
     return row;
@@ -596,8 +625,9 @@
       m.k + " of " + m.slots.general + " general slots). Edges are weighted " +
       (state.weighting === "value" ? "by advertised liquidity" : "one edge, one vote") +
       "; the " + ROUTE_HOPS + "-hop curve composes the per-hop share " +
-      "multiplicatively. Drag the cursor line on the chart, or type a payment " +
-      "size. The shaded band is $" + TYPICAL[0] + "–$" + TYPICAL[1] + ".";
+      "multiplicatively. Set the payment size by typing it, or by dragging " +
+      "across either the chart or the heatmap. The shaded band is $" +
+      TYPICAL[0] + "–$" + TYPICAL[1] + ".";
 
     $("rout-controls-slot").replaceChildren(renderControls());
     $("rout-tiles").replaceChildren(renderTiles());
