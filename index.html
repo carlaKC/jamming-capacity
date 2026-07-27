@@ -19,12 +19,12 @@
     <a href="https://github.com/lightning/bolts/pull/1280">BOLT PR&nbsp;#1280</a>,
     the local resource conservation proposal for mitigating channel jamming.
   </p>
-  <p class="provenance" id="provenance"></p>
 </header>
-<main>
-  <aside id="params">
+<section id="parameters">
+  <h2 class="results-head">Parameters</h2>
+  <div class="param-row">
     <section class="param-group">
-      <h2>Bucket liquidity split</h2>
+      <h3>Bucket liquidity split</h3>
       <p class="hint">% of liquidity; protected takes the remainder</p>
       <label>General % <input type="number" id="general-pct" value="40" min="0" max="100" step="1"></label>
       <label>Congestion % <input type="number" id="congestion-pct" value="20" min="0" max="100" step="1"></label>
@@ -34,7 +34,7 @@
 
     <section class="param-group">
       <div class="group-head">
-        <h2>Bucket slots</h2>
+        <h3>Bucket slots</h3>
         <div class="mode-toggle" role="group" aria-label="Slot allocation mode">
           <button type="button" class="mode active" data-slot-mode="pct">%</button>
           <button type="button" class="mode" data-slot-mode="fixed">fixed</button>
@@ -55,7 +55,18 @@
     </section>
 
     <section class="param-group">
-      <h2>Channel types</h2>
+      <h3>Per-peer general allocation</h3>
+      <p class="hint">k = max(min slots, ⌊general slots × pct⌋)</p>
+      <label>Min slots <input type="number" id="min-slots" value="5" min="0" step="1"></label>
+      <label>Percent <input type="number" id="alloc-pct" value="5" min="0" max="100" step="0.5"></label>
+      <p class="error hidden" id="alloc-error"></p>
+    </section>
+  </div>
+</section>
+<main>
+  <aside id="params">
+    <section class="param-group">
+      <h3>Channel types</h3>
       <p class="hint">max_accepted_htlcs — each becomes a column group</p>
       <div class="chips" id="type-chips"></div>
       <div class="add-row">
@@ -66,15 +77,7 @@
     </section>
 
     <section class="param-group">
-      <h2>Per-peer general allocation</h2>
-      <p class="hint">k = max(min slots, ⌊general slots × pct⌋)</p>
-      <label>Min slots <input type="number" id="min-slots" value="5" min="0" step="1"></label>
-      <label>Percent <input type="number" id="alloc-pct" value="5" min="0" max="100" step="0.5"></label>
-      <p class="error hidden" id="alloc-error"></p>
-    </section>
-
-    <section class="param-group">
-      <h2>BTC prices (USD)</h2>
+      <h3>BTC prices (USD)</h3>
       <div class="value-list" id="price-list"></div>
       <div class="add-row">
         <input type="number" id="price-add" placeholder="e.g. 150000" min="1" step="1000">
@@ -107,6 +110,9 @@
     <div class="table-wrap" id="pct-wrap"></div>
   </section>
 </main>
+<footer>
+  <p class="provenance" id="provenance"></p>
+</footer>
 <div id="tooltip" class="tooltip hidden"></div>
 <script src="data.js"></script>
 <script src="math.js"></script>

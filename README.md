@@ -56,7 +56,7 @@ are kept only when the advertising node has more than one channel
 
 ## Screenshots
 
-The parameters panel and the channel statistics table:
+The parameters row and the channel statistics table:
 
 ![Explorer overview](page.png)
 

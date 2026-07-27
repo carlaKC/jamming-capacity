@@ -88,20 +88,45 @@ h1 {
   letter-spacing: -0.01em;
   margin: 0 0 12px;
 }
-.lead { color: var(--ink-2); font-size: 17px; margin: 0 0 16px; }
+.lead { color: var(--ink-2); font-size: 17px; margin: 0 0 4px; }
 .provenance { color: var(--muted); font-size: 13px; margin: 0; font-style: italic; }
 
 /* ---- layout ---- */
+/* Protocol parameters span the full width up top; the sidebar beside the
+   tables keeps only the controls that shape the columns. */
+#parameters {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 12px 24px 0;
+}
+.param-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 900px) { .param-row { grid-template-columns: 1fr; } }
+/* Cards up here are ~340px of content, so keep the input near its label
+   rather than letting space-between push it to the far edge. */
+.param-row label { max-width: 300px; }
+
 main {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 20px 24px 72px;
+  padding: 20px 24px 40px;
   display: grid;
   grid-template-columns: 290px 1fr;
   gap: 24px;
   align-items: start;
 }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+footer {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px 24px 56px;
+  border-top: 1px solid var(--border);
+}
 
 /* ---- parameter panel ---- */
 #params { display: flex; flex-direction: column; gap: 16px; }
@@ -114,7 +139,7 @@ main {
   box-shadow: var(--shadow-soft);
 }
 
-.param-group h2 {
+.param-group h3 {
   font-family: var(--serif);
   font-size: 17px;
   font-weight: 650;
