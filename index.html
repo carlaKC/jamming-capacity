@@ -82,31 +82,25 @@
       </div>
       <p class="error hidden" id="price-error"></p>
     </section>
-
-    <section class="param-group">
-      <h2>HTLC thresholds (USD)</h2>
-      <div class="value-list" id="threshold-list"></div>
-      <div class="add-row">
-        <input type="number" id="threshold-add" placeholder="e.g. 1000" min="0.01" step="1">
-        <button type="button" class="small" id="threshold-add-btn">add</button>
-      </div>
-      <p class="error hidden" id="threshold-error"></p>
-    </section>
   </aside>
 
   <section id="results">
+    <h2 class="results-head">Channel statistics</h2>
     <p class="table-caption">
       Bucket metrics per channel type (max_accepted_htlcs). Liquidity values
       are % of max_htlc_value_in_flight; saturation is the coupon-collector
       expectation over the random per-peer slot assignment.
     </p>
     <div id="metrics"></div>
+
+    <h2 class="results-head">Channel distribution</h2>
     <div class="tabs" role="tablist">
       <button type="button" class="tab active" data-tab="general">General bucket</button>
       <button type="button" class="tab" data-tab="congestion">Congestion bucket</button>
     </div>
     <p class="table-caption" id="table-caption"></p>
     <div class="table-wrap" id="table-wrap"></div>
+    <p class="error hidden" id="threshold-error"></p>
 
     <h2 class="results-head">Channel percentiles</h2>
     <p class="table-caption" id="pct-caption"></p>

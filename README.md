@@ -40,7 +40,9 @@ exits non-zero on the command line.
 - **Distribution table**: share of mainnet directed edges able to carry a
   single HTLC of at least $X in the general bucket (per-peer liquidity
   allocation) or the congestion bucket (one slot's liquidity), across the BTC
-  prices you configure. Hover a cell for sat values.
+  prices you configure. Hover a cell for sat values. The dollar thresholds are
+  the rows, and are edited in place: `+` on the last row adds one (the table
+  re-sorts around it), and hovering a row reveals a `×` to drop it.
 - **Channel percentile table**: the inverse question — what the edge at a
   given `max_htlc` percentile can actually forward, in dollars, through one
   general slot, a peer's whole general allocation (k slots), or a congestion
@@ -54,7 +56,7 @@ are kept only when the advertising node has more than one channel
 
 ## Screenshots
 
-The parameters panel and per-channel-type metrics table:
+The parameters panel and the channel statistics table:
 
 ![Explorer overview](page.png)
 

@@ -172,6 +172,91 @@
     if (alpha > 0.7) td.classList.add("cell-dark");
   }
 
+  // Thresholds are the distribution table's rows, and are edited there rather
+  // than from the sidebar: they affect no other table.
+
+  function redrawTable() {
+    renderTable(activeMetrics());
+  }
+
+  function thresholdHead(t) {
+    const th = el("th", "row-head threshold-head");
+    th.appendChild(el("span", null, "≥ " + fmtUsd(t)));
+    const remove = el("button", "row-remove", "×");
+    remove.type = "button";
+    remove.setAttribute("aria-label", "Remove the " + fmtUsd(t) + " threshold");
+    remove.addEventListener("click", () => {
+      if (state.thresholds.length === 1) {
+        setError("threshold-error", "Keep at least one threshold.");
+        return;
+      }
+      state.thresholds = state.thresholds.filter((x) => x !== t);
+      setError("threshold-error", null);
+      redrawTable();
+    });
+    th.appendChild(remove);
+    return th;
+  }
+
+  // Trailing row: a "+" that swaps in place for an input. Committing re-renders
+  // the table, so the new row lands in sorted position.
+  function thresholdAddRow(cellCount) {
+    const tr = el("tr", "add-row-tr");
+    const th = el("th", "row-head");
+
+    const plus = el("button", "row-add", "+");
+    plus.type = "button";
+    plus.setAttribute("aria-label", "Add an HTLC threshold");
+
+    const form = el("span", "row-add-form hidden");
+    const input = el("input");
+    input.type = "number";
+    input.min = "0.01";
+    input.step = "1";
+    input.placeholder = "$";
+    input.setAttribute("aria-label", "New HTLC threshold in dollars");
+
+    const commit = () => {
+      const v = parseFloat(input.value);
+      if (!(v > 0)) {
+        setError("threshold-error", "Enter a positive dollar amount.");
+        input.classList.add("invalid");
+        return;
+      }
+      if (!state.thresholds.includes(v)) state.thresholds.push(v);
+      setError("threshold-error", null);
+      redrawTable();
+    };
+    const cancel = () => {
+      form.classList.add("hidden");
+      plus.classList.remove("hidden");
+      input.value = "";
+      input.classList.remove("invalid");
+      setError("threshold-error", null);
+    };
+
+    plus.addEventListener("click", () => {
+      plus.classList.add("hidden");
+      form.classList.remove("hidden");
+      input.focus();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") commit();
+      if (e.key === "Escape") cancel();
+    });
+    const ok = el("button", "small", "add");
+    ok.type = "button";
+    ok.addEventListener("click", commit);
+
+    form.append(input, ok);
+    th.append(plus, form);
+    tr.appendChild(th);
+    const filler = el("td", "add-row-filler");
+    filler.colSpan = cellCount;
+    tr.appendChild(filler);
+    return tr;
+  }
+
   function renderTable(metrics) {
     $("table-caption").textContent = state.tab === "general"
       ? "Share of mainnet directed edges able to carry a single HTLC of at " +
@@ -210,7 +295,7 @@
     const tbody = el("tbody");
     for (const t of thresholds) {
       const tr = el("tr");
-      tr.appendChild(el("th", "row-head", "≥ " + fmtUsd(t)));
+      tr.appendChild(thresholdHead(t));
       for (const m of metrics) {
         const frac = cellFrac(m);
         prices.forEach((p, i) => {
@@ -233,6 +318,7 @@
       }
       tbody.appendChild(tr);
     }
+    tbody.appendChild(thresholdAddRow(metrics.length * prices.length));
     table.appendChild(tbody);
     $("table-wrap").replaceChildren(table);
   }
@@ -563,9 +649,6 @@
   const renderPriceList = () =>
     renderValueList("price-list", "prices", fmtUsd,
       "price-error", "Keep at least one price.");
-  const renderThresholdList = () =>
-    renderValueList("threshold-list", "thresholds", fmtUsd,
-      "threshold-error", "Keep at least one threshold.");
 
   // ---------------- add-value inputs ----------------
 
@@ -613,13 +696,6 @@
       renderPriceList();
     });
 
-  bindAdd("threshold-add", "threshold-add-btn", "threshold-error",
-    (v) => (v > 0 ? null : "Enter a positive dollar amount."),
-    (v) => {
-      if (!state.thresholds.includes(v)) state.thresholds.push(v);
-      renderThresholdList();
-    });
-
   // ---------------- tabs ----------------
 
   for (const btn of document.querySelectorAll(".tab")) {
@@ -628,7 +704,7 @@
       for (const b of document.querySelectorAll(".tab")) {
         b.classList.toggle("active", b === btn);
       }
-      renderTable(activeMetrics());
+      redrawTable();
     });
   }
 
@@ -706,6 +782,5 @@
   syncSlotModeUi();
   renderTypeChips();
   renderPriceList();
-  renderThresholdList();
   renderAll();
 })();
