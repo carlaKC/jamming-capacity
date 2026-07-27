@@ -4,6 +4,7 @@
   "use strict";
 
   const M = window.BucketMath;
+  const R = window.RoutabilityView;
   const DATA = window.EDGE_DATA;
   const CDF = M.makeCdf(DATA.hist);
 
@@ -418,6 +419,13 @@
     renderMetrics(metrics);
     renderTable(metrics);
     renderPercentiles();
+    // The routability section owns its own cursor, weighting and
+    // oversubscription; it takes the bucket parameters from here.
+    R.update({
+      typeMetrics,
+      channelTypes: state.channelTypes,
+      prices: state.prices,
+    });
   }
 
   // ---------------- validation helpers ----------------
@@ -667,6 +675,7 @@
     fmtInt(DATA.directionsDropped) +
     " dropped (single-channel node or no max_htlc).";
 
+  R.mount({ M, CDF, tooltip: $("tooltip") });
   syncSlotModeUi();
   renderAll();
 })();

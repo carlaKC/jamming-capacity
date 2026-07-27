@@ -56,6 +56,17 @@ exits non-zero on the command line.
   general slot, a peer's whole general allocation (k slots), or a congestion
   slot. The corner cell picks the BTC price and the channel type; hover a cell
   for sat values.
+- **General-bucket routability**: what share of payment flow keeps moving
+  through the general bucket with no reputation, against payment size. Per
+  *hop* the limits look survivable; a route only clears if every hop clears, so
+  the per-*route* curve falls away far faster. The gap between the two curves —
+  shaded on the chart — is the flow pushed onto reputation. A heatmap sweeps
+  one to six hops, and the weighting toggle switches between counting edges and
+  weighting them by advertised liquidity.
+
+At the defaults, a $50 payment at $75k/BTC clears one hop 93.8% of the time
+weighted by liquidity but only 40.8% by edge count, and a three-hop route
+clears 82.6% versus 6.8%. That spread is why the weighting toggle exists.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Directed policies
@@ -78,6 +89,11 @@ The channel percentile table — what each bucket lets the edge at a given
 
 ![Channel percentile table](percentile_table.png)
 
+The routability visualizer — the wedge between per-hop and per-route clearance
+is the flow forced onto reputation:
+
+![General-bucket routability](routability.png)
+
 ## Reproduce the numbers on the command line
 
 `analyze_buckets.py` is the headless twin of the page: it runs the same bucket
@@ -93,7 +109,7 @@ All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--prices`, `--thresholds`, `--percentiles`,
-`--percentile-price`, `--percentile-type`);
+`--percentile-price`, `--percentile-type`, `--oversub`, `--payments`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above.
 

@@ -91,6 +91,46 @@
       <p class="table-caption" id="pct-caption"></p>
       <div class="table-wrap" id="pct-wrap"></div>
     </details>
+
+    <details class="result-section" open>
+      <summary class="results-head">General-bucket routability</summary>
+      <p class="table-caption" id="rout-caption"></p>
+      <div id="rout-controls-slot"></div>
+      <div id="rout-tiles"></div>
+      <div id="rout-legend"></div>
+      <div class="chart-card" id="rout-chart"></div>
+      <p class="table-caption">
+        Routability by payment size and hop count. Darker means more of the
+        payment flow stays in the general bucket; the outlined column is the
+        payment size selected above.
+      </p>
+      <div id="rout-heat-legend"></div>
+      <div class="chart-card" id="rout-heat"></div>
+      <details class="sub-section">
+        <summary>Table view</summary>
+        <div id="rout-table"></div>
+      </details>
+      <ul class="caveats">
+        <li>
+          Per-hop numbers overstate routability. The per-route curve is the
+          decision-relevant view, and it composes hops as independent events —
+          real routes correlate, since a payment picks well-funded channels, so
+          treat the route curve as a lower bound rather than an estimate.
+        </li>
+        <li>
+          The base value per edge is its advertised <code>max_htlc</code>, the
+          observable lower bound on <code>max_htlc_value_in_flight_msat</code>.
+          Gossip carries neither that field nor
+          <code>max_accepted_htlcs</code>, so the slot counts are assumptions,
+          not measurements, and every number here moves with them.
+        </li>
+        <li>
+          "% of edges" is not "% of payments" is not "% of liquidity". The
+          weighting toggle exists so the divergence is visible rather than
+          hidden behind one framing.
+        </li>
+      </ul>
+    </details>
   </section>
 </main>
 <footer>
@@ -99,6 +139,7 @@
 <div id="tooltip" class="tooltip hidden"></div>
 <script src="data.js"></script>
 <script src="math.js"></script>
+<script src="routability.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

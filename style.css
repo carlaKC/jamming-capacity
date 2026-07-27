@@ -423,3 +423,139 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
 .tooltip.hidden { display: none; }
 .tt-value { font-family: var(--serif); font-weight: 650; font-size: 14px; }
 .tt-line { color: #C9C7B8; }
+
+/* ---- routability visualizer ---- */
+.sub-section { margin: 18px 0 0; }
+.sub-section > summary {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.sub-section > summary::-webkit-details-marker { display: none; }
+.sub-section > summary::before {
+  content: "";
+  width: 0; height: 0;
+  border-left: 6px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 200ms ease;
+}
+.sub-section[open] > summary::before { transform: rotate(90deg); }
+.sub-section > summary:hover { color: var(--ink); }
+.sub-section > div { margin-top: 10px; }
+
+.rout-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.rout-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+  max-width: none;
+}
+.rout-field-label { font-variant-numeric: tabular-nums; }
+.rout-field input[type="range"] { width: 190px; accent-color: var(--moss); }
+
+/* Readout tiles. Values use proportional figures at display size. */
+.tile-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 18px;
+  box-shadow: var(--shadow-soft);
+}
+.tile-label { font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+.tile-value { font-family: var(--sans); font-size: 27px; font-weight: 800; }
+.tile-note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.tile-verdict { border-left: 4px solid var(--grid); }
+.verdict-line { display: flex; align-items: baseline; gap: 8px; }
+.verdict-glyph { font-size: 15px; }
+.verdict-label { font-size: 17px; font-weight: 800; color: var(--ink); }
+.verdict-good { border-left-color: var(--moss); }
+.verdict-good .verdict-glyph { color: var(--moss); }
+.verdict-warning { border-left-color: var(--clay); }
+.verdict-warning .verdict-glyph { color: var(--clay); }
+.verdict-critical { border-left-color: var(--error); }
+.verdict-critical .verdict-glyph { color: var(--error); }
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.routability-chart, .routability-heat { display: block; width: 100%; height: auto; }
+.chart-tick {
+  font: 400 11px var(--sans);
+  fill: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.chart-axis-title { font: 700 11.5px var(--sans); fill: var(--muted); }
+/* Halo the in-plot text so a curve passing behind it stays legible, rather
+   than boxing the label. */
+.chart-annot, .chart-label {
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.chart-annot { font: 400 10.5px var(--sans); fill: var(--muted); }
+.chart-label { font: 800 12px var(--sans); }
+.hover-layer rect { cursor: crosshair; }
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.legend-item { display: inline-flex; align-items: center; gap: 7px; }
+.legend-swatch { width: 14px; height: 3px; border-radius: 999px; flex: none; }
+.legend-wedge { height: 11px; background: rgba(120, 120, 108, 0.13); border-radius: 3px; }
+
+.ramp-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ramp-cap { margin: 0 6px; }
+.ramp-step { width: 26px; height: 11px; border-radius: 2px; }
+
+.caveats {
+  margin: 20px 0 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--muted);
+  max-width: 88ch;
+}
+.caveats li { margin-bottom: 7px; }
+.caveats code { font-size: 11.5px; background: var(--stone); padding: 1px 5px; border-radius: 5px; }

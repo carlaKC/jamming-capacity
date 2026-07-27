@@ -14,6 +14,8 @@ two tables it prints match what the page renders.
   3. The channel percentile table: the inverse question — what the edge at a
      given max_htlc percentile can actually forward, in dollars, through one
      general slot, a peer's whole general allocation, or a congestion slot.
+  4. General-bucket routability: the share of payment flow that clears the
+     general bucket with no reputation, per hop and composed over a route.
 
 Base value `B` per direction is the advertised `max_htlc_msat` (the observable
 lower bound on `max_htlc_value_in_flight_msat`), kept only when the advertising
@@ -29,7 +31,7 @@ import json
 import math
 import os
 import sys
-from collections import Counter
+from collections import Counter, namedtuple
 
 from build_data import collect
 
@@ -172,30 +174,62 @@ def required_base_sat(threshold_usd, price_usd_per_btc, frac):
 # CDF over the kept edge values (ascending [sat, count] histogram).
 # --------------------------------------------------------------------------
 
+Cdf = namedtuple("Cdf", "sats suffix total value_suffix value_total")
+
+
 def make_cdf(hist):
-    """hist: list of (sat, count) ascending. Returns (sats, suffix, total)
-    where suffix[i] is the number of edges with value >= sats[i]."""
+    """hist: list of (sat, count) ascending.
+
+    suffix[i]       = number of edges with value >= sats[i]
+    value_suffix[i] = their summed max_htlc, for weighting an edge by the size
+                      it advertises rather than one-edge-one-vote.
+    """
     sats = [s for s, _ in hist]
     n = len(hist)
     suffix = [0] * (n + 1)
+    value_suffix = [0] * (n + 1)
     for i in range(n - 1, -1, -1):
         suffix[i] = suffix[i + 1] + hist[i][1]
-    return sats, suffix, (suffix[0] if n else 0)
+        value_suffix[i] = value_suffix[i + 1] + hist[i][0] * hist[i][1]
+    return Cdf(sats, suffix, (suffix[0] if n else 0), value_suffix,
+               (value_suffix[0] if n else 0))
 
 
 def share_at_or_above(cdf, required_sat):
     """Share of edges (0..1) whose value is >= required_sat."""
-    sats, suffix, total = cdf
-    if total == 0 or required_sat == math.inf:
+    if cdf.total == 0 or required_sat == math.inf:
         return 0.0
-    lo = bisect.bisect_left(sats, required_sat)
-    return suffix[lo] / total
+    lo = bisect.bisect_left(cdf.sats, required_sat)
+    return cdf.suffix[lo] / cdf.total
+
+
+def value_share_at_or_above(cdf, required_sat):
+    """Share of total advertised max_htlc (0..1) sitting on edges >= required."""
+    if cdf.value_total <= 0 or required_sat == math.inf:
+        return 0.0
+    lo = bisect.bisect_left(cdf.sats, required_sat)
+    return cdf.value_suffix[lo] / cdf.value_total
+
+
+def per_hop_routability(cdf, sat, frac, weighting):
+    """Share of the flow one hop's general bucket admits at payment `sat`."""
+    if not (frac > 0):
+        return 0.0
+    required = sat / frac
+    return (share_at_or_above(cdf, required) if weighting == "count"
+            else value_share_at_or_above(cdf, required))
+
+
+def route_routability(per_hop, hops):
+    """Independence approximation: every hop must clear. A lower bound — real
+    routes correlate, since a payment picks well-funded channels."""
+    return per_hop ** hops
 
 
 def percentile_sat(cdf, p):
     """Nearest-rank percentile: smallest observed value at or below which at
     least p% of the edges fall. p is 0..100."""
-    sats, suffix, total = cdf
+    sats, suffix, total = cdf.sats, cdf.suffix, cdf.total
     n = len(sats)
     if n == 0 or total <= 0:
         return math.nan
@@ -384,6 +418,54 @@ def print_percentile_table(cdf, cfg, metrics, col=20, label_col=18):
 
 
 # --------------------------------------------------------------------------
+# General-bucket routability (mirrors routability.js).
+#
+# What share of payments keeps flowing through the general bucket with no
+# reputation? Per hop the limits look survivable; a route is only as good as
+# its worst hop and clearance composes multiplicatively, so the per-route
+# figure falls away far faster. The gap between the two is the point.
+# --------------------------------------------------------------------------
+
+ROUTE_HOPS = [1, 2, 3, 4, 5, 6]
+
+WEIGHTINGS = [
+    ("value", "weighted by advertised liquidity"),
+    ("count", "one edge, one vote"),
+]
+
+
+def print_routability_table(cdf, cfg, metrics, col=9):
+    n = cfg["percentile_type"]
+    m = next(x for x in metrics if x["n"] == n)
+    price = cfg["percentile_price"]
+    frac = m["peer_general_frac"] * cfg["oversub"]
+
+    print("-" * 78)
+    print(f"General-bucket routability — {n}-slot channels")
+    print("Share of payment flow clearing the general bucket with no reputation,")
+    print(f"at ${price:,.0f}/BTC. One peer may push {frac * 100:.2f}% of an edge's "
+          f"max_htlc")
+    print(f"(k = {m['k']} of {m['slots']['general']} general slots"
+          + (f", oversubscribed x{cfg['oversub']:g}" if cfg["oversub"] != 1 else "")
+          + "). Hops compose")
+    print("multiplicatively, so treat the multi-hop columns as a lower bound.")
+    print("-" * 78)
+
+    for key, label in WEIGHTINGS:
+        print(f"  {label}")
+        head = f"  {'Payment':<12}" + "".join(
+            f"{str(h) + (' hop' if h == 1 else ' hops'):>{col}}" for h in ROUTE_HOPS)
+        print(head)
+        for usd in cfg["payments"]:
+            hop = per_hop_routability(cdf, usd_to_sat(usd, price), frac, key)
+            row = f"  {'$' + _compact_usd(usd):<12}"
+            for h in ROUTE_HOPS:
+                row += f"{route_routability(hop, h) * 100:>{col - 1}.1f}%"
+            print(row)
+        print()
+
+
+# --------------------------------------------------------------------------
 # Main analysis.
 # --------------------------------------------------------------------------
 
@@ -428,6 +510,7 @@ def analyze(graph, cfg, source, csv_path=None):
     print_distribution_table("congestion", metrics, cdf,
                              cfg["prices"], cfg["thresholds"])
     print_percentile_table(cdf, cfg, metrics)
+    print_routability_table(cdf, cfg, metrics)
 
     if csv_path:
         _write_csv(csv_path, metrics, cdf, cfg)
@@ -515,6 +598,24 @@ def self_test():
     assert percentile_sat(cdf, 81) == 300
     assert percentile_sat(cdf, 100) == 300
     assert math.isnan(percentile_sat(make_cdf([]), 50))
+    # Liquidity weighting over 3x100 + 5x200 + 2x300 = 1,900 sat of max_htlc.
+    assert cdf.value_total == 1900
+    assert value_share_at_or_above(cdf, 1) == 1.0
+    assert abs(value_share_at_or_above(cdf, 200) - 1600 / 1900) < 1e-12
+    assert abs(value_share_at_or_above(cdf, 250) - 600 / 1900) < 1e-12
+    assert value_share_at_or_above(cdf, 301) == 0.0
+    assert value_share_at_or_above(make_cdf([]), 100) == 0.0
+    # Weighting big edges up never lowers the share when the qualifying set is
+    # the largest edges.
+    for t in (1, 100, 150, 200, 250, 300):
+        assert value_share_at_or_above(cdf, t) >= share_at_or_above(cdf, t) - 1e-12
+    # Routability: frac 0.5 means a 100-sat payment needs a 200-sat edge.
+    assert per_hop_routability(cdf, 100, 0.5, "count") == 0.7
+    assert abs(per_hop_routability(cdf, 100, 0.5, "value") - 1600 / 1900) < 1e-12
+    assert per_hop_routability(cdf, 100, 0, "count") == 0.0
+    assert route_routability(0.75, 1) == 0.75
+    assert abs(route_routability(0.75, 3) - 0.421875) < 1e-12
+    assert route_routability(1.0, 6) == 1.0
     # Ordinal row labels match app.js's fmtPctile.
     assert _fmt_pctile(10) == "10th percentile"
     assert _fmt_pctile(1) == "1st percentile"
@@ -584,8 +685,16 @@ def main(argv=None):
                         metavar="USD",
                         help="BTC price for the percentile table (default: 75000)")
     parser.add_argument("--percentile-type", type=int, default=None, metavar="N",
-                        help="channel type for the percentile table "
-                             "(default: the largest --channel-types entry)")
+                        help="channel type for the percentile and routability "
+                             "tables (default: the largest --channel-types entry)")
+    parser.add_argument("--oversub", type=float, default=1.0, metavar="X",
+                        help="per-slot oversubscription over the backed share "
+                             "(default: 1.0)")
+    parser.add_argument("--payments", type=float, nargs="+",
+                        default=[0.1, 1, 5, 10, 50, 100, 500, 1000, 10000],
+                        metavar="USD",
+                        help="payment sizes for the routability table "
+                             "(default: 0.1 1 5 10 50 100 500 1000 10000)")
     parser.add_argument("--saturation-trials", type=int, default=3000, metavar="N",
                         help="Monte-Carlo trials for saturation (default: 3000)")
     args = parser.parse_args(argv)
@@ -634,6 +743,8 @@ def main(argv=None):
         "thresholds": args.thresholds,
         "percentiles": args.percentiles,
         "percentile_price": args.percentile_price,
+        "oversub": args.oversub,
+        "payments": args.payments,
         "trials": args.saturation_trials,
     }
 
