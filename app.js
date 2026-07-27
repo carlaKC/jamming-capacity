@@ -7,7 +7,6 @@
   const DATA = window.EDGE_DATA;
   const CDF = M.makeCdf(DATA.hist);
 
-  const PRESET_TYPES = [483, 114, 50];
   const PERCENTILES = [10, 25, 50, 75, 90, 99];
   const DEFAULT_PCT_PRICE = 75000;
 
@@ -21,6 +20,8 @@
     congestionSlotPct: 20,
     generalSlots: 30,
     congestionSlots: 10,
+    // Channel types and prices are fixed: they are the tables' columns and are
+    // no longer editable from the page.
     channelTypes: [483, 114, 50],
     minSlots: 5,
     allocPct: 5,
@@ -583,119 +584,6 @@
   $("min-slots").addEventListener("input", onAllocInput);
   $("alloc-pct").addEventListener("input", onAllocInput);
 
-  // ---------------- channel type chips ----------------
-
-  function renderTypeChips() {
-    const root = $("type-chips");
-    root.replaceChildren();
-    const all = [...new Set([...PRESET_TYPES, ...state.channelTypes])].sort((a, b) => b - a);
-    for (const n of all) {
-      const active = state.channelTypes.includes(n);
-      const custom = !PRESET_TYPES.includes(n);
-      const chip = el("button", "chip" + (active ? " active" : ""), String(n));
-      chip.type = "button";
-      if (custom) chip.appendChild(el("span", "x", "×"));
-      chip.addEventListener("click", () => {
-        if (active && state.channelTypes.length === 1) {
-          setError("type-error", "Keep at least one channel type.");
-          return;
-        }
-        if (!active) {
-          const offenders = tooSmallForFixed(
-            state.generalSlots, state.congestionSlots, [n]);
-          if (offenders) {
-            setError("type-error", fixedFitMessage(
-              offenders, state.generalSlots, state.congestionSlots));
-            return;
-          }
-        }
-        state.channelTypes = active
-          ? state.channelTypes.filter((v) => v !== n)
-          : [...state.channelTypes, n];
-        setError("type-error", null);
-        renderTypeChips();
-        renderAll();
-      });
-      root.appendChild(chip);
-    }
-  }
-
-  // ---------------- sorted value lists (prices, thresholds) ----------------
-
-  function renderValueList(rootId, key, format, errId, keepMsg) {
-    const root = $(rootId);
-    root.replaceChildren();
-    for (const v of [...state[key]].sort((a, b) => a - b)) {
-      const row = el("div", "value-row");
-      row.appendChild(el("span", "value-label", format(v)));
-      const remove = el("button", "value-remove", "×");
-      remove.type = "button";
-      remove.setAttribute("aria-label", "Remove " + format(v));
-      remove.addEventListener("click", () => {
-        if (state[key].length === 1) {
-          setError(errId, keepMsg);
-          return;
-        }
-        state[key] = state[key].filter((x) => x !== v);
-        setError(errId, null);
-        renderValueList(rootId, key, format, errId, keepMsg);
-        renderAll();
-      });
-      row.appendChild(remove);
-      root.appendChild(row);
-    }
-  }
-
-  const renderPriceList = () =>
-    renderValueList("price-list", "prices", fmtUsd,
-      "price-error", "Keep at least one price.");
-
-  // ---------------- add-value inputs ----------------
-
-  function bindAdd(inputId, btnId, errId, parse, apply) {
-    const submit = () => {
-      const raw = readNumber($(inputId));
-      const err = parse(raw);
-      if (err) {
-        setError(errId, err);
-        $(inputId).classList.add("invalid");
-        return;
-      }
-      $(inputId).classList.remove("invalid");
-      $(inputId).value = "";
-      setError(errId, null);
-      apply(raw);
-      renderAll();
-    };
-    $(btnId).addEventListener("click", submit);
-    $(inputId).addEventListener("keydown", (e) => {
-      if (e.key === "Enter") submit();
-    });
-  }
-
-  bindAdd("type-add", "type-add-btn", "type-error",
-    (v) => {
-      if (!(Number.isInteger(v) && v >= 1 && v <= 483)) {
-        return "Enter a whole number of slots between 1 and 483 (the BOLT 2 maximum).";
-      }
-      const offenders = tooSmallForFixed(
-        state.generalSlots, state.congestionSlots, [v]);
-      return offenders
-        ? fixedFitMessage(offenders, state.generalSlots, state.congestionSlots)
-        : null;
-    },
-    (v) => {
-      if (!state.channelTypes.includes(v)) state.channelTypes.push(v);
-      renderTypeChips();
-    });
-
-  bindAdd("price-add", "price-add-btn", "price-error",
-    (v) => (v > 0 ? null : "Enter a positive price."),
-    (v) => {
-      if (!state.prices.includes(v)) state.prices.push(v);
-      renderPriceList();
-    });
-
   // ---------------- tabs ----------------
 
   for (const btn of document.querySelectorAll(".tab")) {
@@ -780,7 +668,5 @@
     " dropped (single-channel node or no max_htlc).";
 
   syncSlotModeUi();
-  renderTypeChips();
-  renderPriceList();
   renderAll();
 })();

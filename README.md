@@ -14,12 +14,20 @@ it locally: open `index.html` — no build step, no server needed.
 
 ## What it shows
 
-- **Per-channel-type metrics** for each `max_accepted_htlcs` you select:
-  slots per bucket (general / congestion / protected), per-peer general slot
-  allocation `k = max(min_slots, ⌊general_slots × pct⌋)`, the expected number
-  of channels an attacker needs to saturate the general bucket (coupon
-  collector over the random slot assignment), and liquidity limits as a
-  percentage of `max_htlc_value_in_flight_msat`.
+The page has a **Parameters** row across the top and three result sections
+below it — **Channel statistics**, **Channel distribution** and **Channel
+percentiles** — each collapsible by its heading.
+
+- **Channel statistics**, per `max_accepted_htlcs`: slots per bucket
+  (general / congestion / protected), per-peer general slot allocation
+  `k = max(min_slots, ⌊general_slots × pct⌋)`, the expected number of channels
+  an attacker needs to saturate the general bucket (coupon collector over the
+  random slot assignment), and liquidity limits as a percentage of
+  `max_htlc_value_in_flight_msat`.
+
+The channel types (483 / 114 / 50) and BTC prices ($50k / $75k / $100k) are
+fixed on the page; `analyze_buckets.py` takes `--channel-types` and `--prices`
+to vary them.
 
 **Liquidity** is always split by percentage of `max_htlc_value_in_flight_msat`
 — general and congestion, with protected taking the remainder.
@@ -37,13 +45,13 @@ Protected is derived in both modes and never editable. Fixed counts that
 wouldn't fit inside a selected channel type are refused rather than clamped:
 picking 30 + 10 with a 20-slot type in play raises an error on the page and
 exits non-zero on the command line.
-- **Distribution table**: share of mainnet directed edges able to carry a
+- **Channel distribution**: share of mainnet directed edges able to carry a
   single HTLC of at least $X in the general bucket (per-peer liquidity
-  allocation) or the congestion bucket (one slot's liquidity), across the BTC
-  prices you configure. Hover a cell for sat values. The dollar thresholds are
+  allocation) or the congestion bucket (one slot's liquidity), across the three
+  BTC prices. Hover a cell for sat values. The dollar thresholds are
   the rows, and are edited in place: `+` on the last row adds one (the table
   re-sorts around it), and hovering a row reveals a `×` to drop it.
-- **Channel percentile table**: the inverse question — what the edge at a
+- **Channel percentiles**: the inverse question — what the edge at a
   given `max_htlc` percentile can actually forward, in dollars, through one
   general slot, a peer's whole general allocation (k slots), or a congestion
   slot. The corner cell picks the BTC price and the channel type; hover a cell
