@@ -33,7 +33,8 @@ import os
 import sys
 from collections import Counter, namedtuple
 
-from build_data import collect
+from build_data import (parse_graph, sample_routes, DEFAULT_SOURCES,
+                        DEFAULT_PER_SOURCE, DEFAULT_SEED)
 
 # --------------------------------------------------------------------------
 # Units.
@@ -220,10 +221,22 @@ def per_hop_routability(cdf, sat, frac, weighting):
             else value_share_at_or_above(cdf, required))
 
 
-def route_routability(per_hop, hops):
-    """Independence approximation: every hop must clear. A lower bound — real
-    routes correlate, since a payment picks well-funded channels."""
-    return per_hop ** hops
+def route_routability(route_cdf, sat, frac):
+    """Share of sampled routes whose bottleneck clears a payment of `sat`.
+
+    A route clears when every channel a general bucket applies to clears, and
+    the allocation is the same fraction `frac` of each channel's max_htlc, so
+    the test collapses to bottleneck >= sat / frac. Routes count once each.
+    """
+    if route_cdf is None or not (frac > 0):
+        return 0.0
+    return share_at_or_above(route_cdf, sat / frac)
+
+
+def make_route_cdfs(route_hist):
+    """{hops: Counter({bottleneck_sat: routes})} -> {hops: Cdf}."""
+    return {h: make_cdf(sorted(counts.items()))
+            for h, counts in route_hist.items()}
 
 
 def percentile_sat(cdf, p):
@@ -421,47 +434,46 @@ def print_percentile_table(cdf, cfg, metrics, col=20, label_col=18):
 # General-bucket routability (mirrors routability.js).
 #
 # What share of payments keeps flowing through the general bucket with no
-# reputation? Per hop the limits look survivable; a route is only as good as
-# its worst hop and clearance composes multiplicatively, so the per-route
-# figure falls away far faster. The gap between the two is the point.
+# reputation? Measured over routes sampled from the real graph at build time,
+# indexed by how many nodes forward on them: A->B->C is one hop, a direct
+# payment is none. Each route is reduced to its bottleneck — the smallest
+# max_htlc among the channels a general bucket applies to, which excludes the
+# sender's own first channel.
 # --------------------------------------------------------------------------
 
 ROUTE_HOPS = [1, 2, 3, 4, 5, 6]
 
-WEIGHTINGS = [
-    ("value", "weighted by advertised liquidity"),
-    ("count", "one edge, one vote"),
-]
 
-
-def print_routability_table(cdf, cfg, metrics, col=9):
+def print_routability_table(route_cdfs, cfg, metrics, col=9):
     n = cfg["percentile_type"]
     m = next(x for x in metrics if x["n"] == n)
     price = cfg["percentile_price"]
     frac = m["peer_general_frac"]
+    hops = [h for h in ROUTE_HOPS if h in route_cdfs]
 
     print("-" * 78)
     print(f"General-bucket routability — {n}-slot channels")
-    print("Share of payment flow clearing the general bucket with no reputation,")
-    print(f"at ${price:,.0f}/BTC. One peer may push {frac * 100:.2f}% of an edge's "
-          f"max_htlc")
-    print(f"(k = {m['k']} of {m['slots']['general']} general slots). "
-          f"Hops compose")
-    print("multiplicatively, so treat the multi-hop columns as a lower bound.")
+    print("Share of sampled routes clearing the general bucket with no")
+    print(f"reputation (k = {m['k']} of {m['slots']['general']} general slots).")
+    print("A hop is a forwarding node, so each column is its own sample of")
+    print("node pairs and the columns are not nested.")
     print("-" * 78)
 
-    for key, label in WEIGHTINGS:
-        print(f"  {label}")
-        head = f"  {'Payment':<12}" + "".join(
-            f"{str(h) + (' hop' if h == 1 else ' hops'):>{col}}" for h in ROUTE_HOPS)
-        print(head)
-        for usd in cfg["payments"]:
-            hop = per_hop_routability(cdf, usd_to_sat(usd, price), frac, key)
-            row = f"  {'$' + _compact_usd(usd):<12}"
-            for h in ROUTE_HOPS:
-                row += f"{route_routability(hop, h) * 100:>{col - 1}.1f}%"
-            print(row)
-        print()
+    if not hops:
+        print("  no sampled routes in this dataset\n")
+        return
+
+    print("  " + f"{'Payment':<12}" + "".join(
+        f"{str(h) + (' hop' if h == 1 else ' hops'):>{col}}" for h in hops))
+    for usd in cfg["payments"]:
+        sat = usd_to_sat(usd, price)
+        row = f"  {'$' + _compact_usd(usd):<12}"
+        for h in hops:
+            row += f"{route_routability(route_cdfs[h], sat, frac) * 100:>{col - 1}.1f}%"
+        print(row)
+    print("  " + f"{'routes':<12}" + "".join(
+        f"{route_cdfs[h].total:>{col},.0f}" for h in hops))
+    print()
 
 
 # --------------------------------------------------------------------------
@@ -469,13 +481,17 @@ def print_routability_table(cdf, cfg, metrics, col=9):
 # --------------------------------------------------------------------------
 
 def analyze(graph, cfg, source, csv_path=None):
-    kept, dropped, single = collect(graph)
+    kept, adjacency, stats = parse_graph(graph)
     if not kept:
         print("no usable directed policies found", file=sys.stderr)
         return 1
 
     hist = sorted(Counter(kept).items())
     cdf = make_cdf(hist)
+    route_hist, route_stats = sample_routes(
+        adjacency, cfg["route_sources"], cfg["route_per_source"],
+        cfg["route_seed"])
+    route_cdfs = make_route_cdfs(route_hist)
 
     metrics = [type_metrics(n, cfg)
                for n in sorted(cfg["channel_types"], reverse=True)]
@@ -484,7 +500,10 @@ def analyze(graph, cfg, source, csv_path=None):
     print("BOLT #1280 local resource conservation — mainnet bucket analysis")
     print("=" * 78)
     print(f"Data: {os.path.basename(source)} — {len(kept):,} directed edges kept, "
-          f"{dropped:,} dropped (single-channel node or no max_htlc).")
+          f"{stats['dropped']:,} dropped (single-channel node), "
+          f"{stats['imputed']:,} with max_htlc imputed from capacity.")
+    print(f"Routes: {route_stats['sampled']:,} sampled from "
+          f"{cfg['route_sources']:,} sources (seed {cfg['route_seed']}).")
     print(f"Bucket liquidity split: general {cfg['general_pct']}%, "
           f"congestion {cfg['congestion_pct']}%, "
           f"protected {100 - cfg['general_pct'] - cfg['congestion_pct']}% "
@@ -509,7 +528,7 @@ def analyze(graph, cfg, source, csv_path=None):
     print_distribution_table("congestion", metrics, cdf,
                              cfg["prices"], cfg["thresholds"])
     print_percentile_table(cdf, cfg, metrics)
-    print_routability_table(cdf, cfg, metrics)
+    print_routability_table(route_cdfs, cfg, metrics)
 
     if csv_path:
         _write_csv(csv_path, metrics, cdf, cfg)
@@ -612,9 +631,19 @@ def self_test():
     assert per_hop_routability(cdf, 100, 0.5, "count") == 0.7
     assert abs(per_hop_routability(cdf, 100, 0.5, "value") - 1600 / 1900) < 1e-12
     assert per_hop_routability(cdf, 100, 0, "count") == 0.0
-    assert route_routability(0.75, 1) == 0.75
-    assert abs(route_routability(0.75, 3) - 0.421875) < 1e-12
-    assert route_routability(1.0, 6) == 1.0
+    # Route bottlenecks, not per-channel values. Mirrors math.test.js: at
+    # frac 0.5 a 100-sat payment needs a 200-sat bottleneck.
+    route_cdfs = make_route_cdfs({
+        1: Counter({100: 2, 200: 5, 400: 3}),
+        3: Counter({100: 6, 200: 3, 400: 1}),
+    })
+    assert abs(route_routability(route_cdfs[1], 100, 0.5) - 0.8) < 1e-12
+    assert abs(route_routability(route_cdfs[3], 100, 0.5) - 0.4) < 1e-12
+    assert route_routability(route_cdfs[1], 100, 0) == 0.0
+    assert route_routability(None, 100, 0.5) == 0.0
+    assert route_routability(route_cdfs[1], 1, 0.5) == 1.0
+    assert route_routability(route_cdfs[1], 10**9, 0.5) == 0.0
+    assert make_route_cdfs({}) == {}
     # Ordinal row labels match app.js's fmtPctile.
     assert _fmt_pctile(10) == "10th percentile"
     assert _fmt_pctile(1) == "1st percentile"
@@ -693,6 +722,15 @@ def main(argv=None):
                              "(default: 0.1 1 5 10 50 100 500 1000 10000)")
     parser.add_argument("--saturation-trials", type=int, default=3000, metavar="N",
                         help="Monte-Carlo trials for saturation (default: 3000)")
+    parser.add_argument("--route-sources", type=int, default=DEFAULT_SOURCES,
+                        metavar="N",
+                        help="route-sample source nodes (default: %(default)s)")
+    parser.add_argument("--route-per-source", type=int,
+                        default=DEFAULT_PER_SOURCE, metavar="N",
+                        help="destinations per source (default: %(default)s)")
+    parser.add_argument("--route-seed", type=int, default=DEFAULT_SEED,
+                        metavar="N",
+                        help="route sampling seed (default: %(default)s)")
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -741,6 +779,9 @@ def main(argv=None):
         "percentile_price": args.percentile_price,
         "payments": args.payments,
         "trials": args.saturation_trials,
+        "route_sources": args.route_sources,
+        "route_per_source": args.route_per_source,
+        "route_seed": args.route_seed,
     }
 
     with open(args.graph) as fh:

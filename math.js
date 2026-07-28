@@ -190,11 +190,23 @@
       : valueShareAtOrAbove(cdf, required);
   }
 
-  // Independence approximation: a route clears when every hop clears. Real
-  // routes correlate (a payment picks well-funded channels), so this is a
-  // lower bound rather than an estimate.
-  function routeRoutability(perHop, hops) {
-    return Math.pow(perHop, hops);
+  // A sampled route clears when every channel a general bucket applies to
+  // clears. The allocation is the same fraction `frac` of every channel's
+  // max_htlc, so the route clears a payment of `sat` exactly when its
+  // bottleneck -- the smallest max_htlc among those channels -- is at least
+  // sat / frac. routeCdf is built over the sampled bottlenecks for one hop
+  // count; routes count once each, since weighting them by size would weight
+  // them by the very quantity being tested.
+  function routeRoutability(routeCdf, sat, frac) {
+    if (!routeCdf || !(frac > 0)) return 0;
+    return shareAtOrAbove(routeCdf, sat / frac);
+  }
+
+  // hopsHist: { "1": [[sat, count], ...], ... } keyed by forwarding-node count.
+  function makeRouteCdfs(hopsHist) {
+    const out = {};
+    for (const hops in hopsHist) out[hops] = makeCdf(hopsHist[hops]);
+    return out;
   }
 
   // Nearest-rank percentile: the smallest observed value at or below which at
@@ -234,6 +246,7 @@
     valueShareAtOrAbove,
     perHopRoutability,
     routeRoutability,
+    makeRouteCdfs,
     percentileSat,
   };
 });

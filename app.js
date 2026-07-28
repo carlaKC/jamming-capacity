@@ -7,6 +7,8 @@
   const R = window.RoutabilityView;
   const DATA = window.EDGE_DATA;
   const CDF = M.makeCdf(DATA.hist);
+  // Sampled route bottlenecks, keyed by how many nodes forward on the route.
+  const ROUTE_CDFS = M.makeRouteCdfs((DATA.routes || {}).hops || {});
 
   const PERCENTILES = [10, 25, 50, 75, 90, 99];
   const DEFAULT_PCT_PRICE = 75000;
@@ -660,13 +662,16 @@
 
   // ---------------- boot ----------------
 
+  const routeStats = (DATA.routes || {}).stats || {};
   $("provenance").textContent =
     "Data: " + DATA.source + " (" + DATA.generated + ") — " +
     fmtInt(DATA.directionsKept) + " directed edges kept, " +
-    fmtInt(DATA.directionsDropped) +
-    " dropped (single-channel node or no max_htlc).";
+    fmtInt(DATA.directionsDropped) + " dropped (single-channel node), " +
+    fmtInt(DATA.directionsImputed) +
+    " with max_htlc imputed from capacity; " +
+    fmtInt(routeStats.sampled || 0) + " routes sampled.";
 
-  R.mount({ M, CDF, tooltip: $("tooltip") });
+  R.mount({ M, ROUTE: ROUTE_CDFS, tooltip: $("tooltip") });
   syncSlotModeUi();
   renderAll();
 })();

@@ -3,14 +3,17 @@
  * One question: under the local resource conservation limits, what share of
  * payments keeps flowing through the general bucket — no reputation required?
  *
- * The point of the section is the gap between two curves. Per *hop* the limits
- * look survivable; payments cross several hops and general-bucket clearance
- * composes multiplicatively, so per *route* it falls off a cliff.
+ * Both curves come from routes sampled out of the real graph at build time
+ * (see build_data.py), indexed by how many nodes forward on them: A->B->C is
+ * one hop, because only B forwards. Each sampled route is reduced to its
+ * bottleneck — the smallest max_htlc among the channels a general bucket
+ * actually applies to — so the share of routes that clear a payment is just
+ * the share of bottlenecks at or above payment / frac. Every bucket parameter
+ * on the page moves frac; the sampled topology stays put.
  *
  * All bucket math lives in math.js; this file owns the section's own state
- * (payment cursor, weighting, price, channel type) and its
- * SVG rendering. app.js hands it the current bucket parameters on every
- * render.
+ * (payment cursor, price, channel type) and its SVG rendering. app.js hands it
+ * the current bucket parameters on every render.
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
@@ -40,7 +43,7 @@
   // Where everyday Lightning payments actually sit. Shaded, not labelled.
   const TYPICAL = [10, 200];
   const ROUTE_HOPS = 3;
-  const HEAT_HOPS = [1, 2, 3, 4, 5, 6];
+  const ALL_HOPS = [1, 2, 3, 4, 5, 6];
   const HEAT_COLS = 25;          // half-decade-ish columns across the span
   const CURVE_POINTS = 160;
 
@@ -48,10 +51,13 @@
 
   const state = {
     payUsd: 50,
-    weighting: "value",   // "value" (liquidity-weighted) | "count"
     price: 75000,
     type: 483,
   };
+
+  // Hop counts the sample actually covers, so a thin dataset cannot leave
+  // empty rows on the heatmap.
+  let HEAT_HOPS = ALL_HOPS;
 
   // Live handles into the rendered SVG, so dragging the cursor can move it
   // without rebuilding the whole section on every pointer event.
@@ -61,7 +67,7 @@
   };
 
   let M = null;
-  let CDF = null;
+  let ROUTE = null;       // { "1": cdf, ... } over sampled route bottlenecks
   let params = null;      // { typeMetrics, channelTypes, prices }
   let mounted = false;
   let tooltipEl = null;
@@ -114,9 +120,10 @@
     return params.typeMetrics(activeType()).peerGeneralFrac;
   }
 
-  function perHopAt(usd) {
+  // Share of sampled `hops`-hop routes whose bottleneck clears this payment.
+  function routeAt(usd, hops) {
     const sat = M.usdToSat(usd, activePrice());
-    return M.perHopRoutability(CDF, sat, routableFrac(), state.weighting);
+    return M.routeRoutability(ROUTE[hops], sat, routableFrac());
   }
 
   // ---------------- verdict ----------------
@@ -145,8 +152,7 @@
     const pts = [];
     for (let i = 0; i <= CURVE_POINTS; i++) {
       const usd = USD_MIN * Math.pow(10, (i / CURVE_POINTS) * 5);
-      const hop = perHopAt(usd);
-      pts.push({ usd, hop, route: M.routeRoutability(hop, ROUTE_HOPS) });
+      pts.push({ usd, hop: routeAt(usd, 1), route: routeAt(usd, ROUTE_HOPS) });
     }
     return pts;
   }
@@ -163,9 +169,9 @@
       class: "routability-chart",
       role: "img",
       "aria-label":
-        "Share of payments clearing the general bucket against payment size, " +
-        "for one hop and for a three-hop route. Full figures are in the table " +
-        "below the chart.",
+        "Share of sampled routes clearing the general bucket against payment " +
+        "size, for one-hop and for three-hop routes. Figures for the selected " +
+        "payment size are stated in the tiles above the chart.",
     });
 
     // Typical-payment reference band, behind everything.
@@ -230,8 +236,8 @@
     // Cursor. Draggable: the line is the payment-size control, mirrored by the
     // input field above the chart.
     const cx = xOf(state.payUsd);
-    const hop = perHopAt(state.payUsd);
-    const route = M.routeRoutability(hop, ROUTE_HOPS);
+    const hop = routeAt(state.payUsd, 1);
+    const route = routeAt(state.payUsd, ROUTE_HOPS);
     refs.cursorLine = svg("line", {
       x1: cx, y1: PAD.top, x2: cx, y2: PAD.top + PH,
       stroke: AXIS_INK, "stroke-width": 1,
@@ -303,8 +309,8 @@
   function setPayment(usd) {
     state.payUsd = clampUsd(usd);
     const cx = xOf(state.payUsd);
-    const hop = perHopAt(state.payUsd);
-    const route = M.routeRoutability(hop, ROUTE_HOPS);
+    const hop = routeAt(state.payUsd, 1);
+    const route = routeAt(state.payUsd, ROUTE_HOPS);
     if (refs.cursorLine) {
       refs.cursorLine.setAttribute("x1", cx);
       refs.cursorLine.setAttribute("x2", cx);
@@ -342,11 +348,15 @@
   const heatIndex = (usd) => Math.min(HEAT_COLS - 1, Math.max(0,
     Math.floor((Math.log10(usd / USD_MIN) / 5) * HEAT_COLS)));
 
+  // Each row is its own measured sample now, so a column carries one share per
+  // hop count rather than a single figure raised to a power.
   function heatColumns() {
     const cols = [];
     for (let i = 0; i < HEAT_COLS; i++) {
       const usd = USD_MIN * Math.pow(10, heatFrac(i) * 5);
-      cols.push({ usd, hop: perHopAt(usd) });
+      const byHop = {};
+      for (const h of HEAT_HOPS) byHop[h] = routeAt(usd, h);
+      cols.push({ usd, byHop });
     }
     return cols;
   }
@@ -362,8 +372,8 @@
       class: "routability-heat",
       role: "img",
       "aria-label":
-        "Share of routes clearing the general bucket by payment size and hop " +
-        "count, one to six hops. Full figures are in the table below.",
+        "Share of sampled routes clearing the general bucket by payment size " +
+        "and hop count, one to six hops. Hovering a cell states its figure.",
     });
 
     HEAT_HOPS.forEach((h, r) => {
@@ -373,7 +383,7 @@
         class: "chart-tick",
       }, h + (h === 1 ? " hop" : " hops")));
       cols.forEach((c, i) => {
-        const share = M.routeRoutability(c.hop, h);
+        const share = c.byHop[h];
         // 2px surface gap between cells instead of a border.
         node.appendChild(svg("rect", {
           x: HPAD.left + i * cellW + 1, y: y + 1,
@@ -412,8 +422,7 @@
       const r = Math.min(HEAT_HOPS.length - 1,
         Math.max(0, Math.floor((py - HPAD.top) / HROW)));
       const c = cols[heatIndex(usdAt(e.clientX))];
-      showHeatTip(c.usd, HEAT_HOPS[r],
-        M.routeRoutability(c.hop, HEAT_HOPS[r]), e);
+      showHeatTip(c.usd, HEAT_HOPS[r], c.byHop[HEAT_HOPS[r]], e);
     });
     overlay.addEventListener("pointerdown", (e) => {
       e.preventDefault();
@@ -466,7 +475,7 @@
       el("div", "tt-line", "one hop: " + fmtPct1(p.hop)),
       el("div", "tt-line", ROUTE_HOPS + "-hop route: " + fmtPct1(p.route)),
       el("div", "tt-line",
-        "lost to composing hops: " + fmtPct1(p.hop - p.route)),
+        "lost to the longer route: " + fmtPct1(p.hop - p.route)),
     );
     tooltipEl.classList.remove("hidden");
     place(e);
@@ -486,12 +495,6 @@
   const hideTip = () => tooltipEl.classList.add("hidden");
 
   // ---------------- controls ----------------
-
-  // Sits under the toggle: which population the per-hop share is taken over.
-  const WEIGHT_NOTES = {
-    value: "channels count in proportion to their max_htlc",
-    count: "every channel counts once, whatever its size",
-  };
 
   function select(label, values, selected, format, onPick) {
     const sel = el("select", "corner-select");
@@ -523,20 +526,6 @@
       [...params.channelTypes].sort((a, b) => b - a), activeType(),
       (n) => fmtInt(n) + " slots", (n) => { state.type = n; }));
 
-    const weighting = el("div", "rout-weighting");
-    const toggle = el("div", "mode-toggle");
-    toggle.setAttribute("role", "group");
-    toggle.setAttribute("aria-label", "Edge weighting");
-    for (const [key, text] of [["value", "by liquidity"], ["count", "by count"]]) {
-      const btn = el("button", "mode" + (state.weighting === key ? " active" : ""), text);
-      btn.type = "button";
-      btn.addEventListener("click", () => { state.weighting = key; render(); });
-      toggle.appendChild(btn);
-    }
-    weighting.appendChild(toggle);
-    weighting.appendChild(el("p", "control-note", WEIGHT_NOTES[state.weighting]));
-    row.appendChild(weighting);
-
     const pay = el("input", "pay-input");
     pay.type = "number";
     pay.min = String(USD_MIN);
@@ -559,8 +548,8 @@
   // ---------------- tiles ----------------
 
   function renderTiles() {
-    const hop = perHopAt(state.payUsd);
-    const route = M.routeRoutability(hop, ROUTE_HOPS);
+    const hop = routeAt(state.payUsd, 1);
+    const route = routeAt(state.payUsd, ROUTE_HOPS);
     const v = verdictFor(route);
     const row = el("div", "tile-row");
 
@@ -595,7 +584,6 @@
 
   function render() {
     if (!mounted) return;
-    const m = params.typeMetrics(activeType());
     const pts = curvePoints();
 
     $("rout-controls-slot").replaceChildren(renderControls());
@@ -622,15 +610,16 @@
     }
     const wedge = el("span", "legend-item");
     const ws = el("span", "legend-swatch legend-wedge");
-    wedge.append(ws, el("span", null, "lost to composing hops"));
+    wedge.append(ws, el("span", null, "lost to the longer route"));
     wrap.appendChild(wedge);
     return wrap;
   }
 
   function mount(deps) {
     M = deps.M;
-    CDF = deps.CDF;
+    ROUTE = deps.ROUTE;
     tooltipEl = deps.tooltip;
+    HEAT_HOPS = ALL_HOPS.filter((h) => ROUTE[h] && ROUTE[h].total > 0);
     mounted = true;
   }
 

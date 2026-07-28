@@ -112,19 +112,26 @@
 	  lengths. It uses the following methodology:
          </p>
         <ul class="method-bullets">
-          <li>Start with the set of directed channels.</li>
+          <li>Sample real routes between random pairs of nodes in the graph.</li>
           <li>
-            Calculate the portion of them that can accommodate the chosen
-            payment in their general bucket.
+            Drop each route's first channel: the sender is not forwarding, so
+            no general bucket applies to it.
           </li>
-          <li>Take that portion as the success probability for a single hop.</li>
           <li>
-            Treat hops as independent samples to get the probability of routing
-            in general.
+            Reduce the rest to the route's bottleneck &mdash; the smallest
+            <code>max_htlc</code> among them.
+          </li>
+          <li>
+            Take the portion of routes whose bottleneck accommodates the
+            payment in its general bucket.
           </li>
         </ul>
         <p>
-          This is, of course, a very crude approximation!
+          A hop here is a node that forwards, so <code>A&rarr;B&rarr;C</code> is
+          one hop and a direct payment is none. Because each hop count is a
+          different set of node pairs, the rows are not nested: one-hop routes
+          are not simply the best case, since their only gated channel is the
+          delivery into the destination, and destinations are usually small.
         </p>
               </div>
       <p class="table-caption" id="rout-caption"></p>
@@ -133,22 +140,24 @@
       <div id="rout-legend"></div>
       <div class="chart-card" id="rout-chart"></div>
       <p class="table-caption">
-        The same calculation at every hop count from one to six. Darker means
-        more of the flow stays in general; the outlined column is the selected
-        payment size, and dragging across the squares moves it.
+        The same measurement over each hop count's own sample of routes, from
+        one to six. Darker means more of the flow stays in general; the outlined
+        column is the selected payment size, and dragging across the squares
+        moves it.
       </p>
       <div id="rout-heat-legend"></div>
       <div class="chart-card" id="rout-heat"></div>
       <h3 class="method-head">What this does not account for</h3>
       <ul class="caveats">
         <li>
-          <strong>Hops are not really independent.</strong> Pathfinding steers
-	  towards well funded channels rather than sampling the grap at random
-	  so the route curve should be considered a lower bound.
+          <strong>One route per pair.</strong> We take the shortest route,
+	  cheapest among equals, and never retry &mdash; a real sender has
+	  several routes to try, so this is a lower bound.
 	</li>
         <li>
           <strong>Unknown max_htlc_value_in_flight.</strong>  This value is not
-	  gossiped. We use <code>max_htlc_msat</code> as a proxy.
+	  gossiped. We use <code>max_htlc_msat</code> as a proxy, and where a
+	  direction advertises none we impute 99% of capacity.
 	  </li>
         <li>
           <strong>One HTLC in flight.</strong> We assume a single HTLC occupying

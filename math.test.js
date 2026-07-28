@@ -102,10 +102,29 @@ approx(M.perHopRoutability(cdf, 100, 0.5, "count"), 0.75, 1e-12, "per hop, count
 approx(M.perHopRoutability(cdf, 100, 0.5, "value"), 800 / 900, 1e-12, "per hop, value-weighted");
 eq(M.perHopRoutability(cdf, 100, 0, "count"), 0, "zero frac -> nothing routes");
 eq(M.perHopRoutability(cdf, 100, NaN, "count"), 0, "NaN frac -> nothing routes");
-eq(M.routeRoutability(0.75, 1), 0.75, "one hop is the per-hop figure");
-approx(M.routeRoutability(0.75, 3), 0.421875, 1e-12, "three hops compose multiplicatively");
-eq(M.routeRoutability(1, 6), 1, "everything routes -> route clears");
-eq(M.routeRoutability(0, 3), 0, "nothing routes -> route fails");
+
+// --- routeRoutability / makeRouteCdfs
+// Route bottlenecks, not per-channel values: 2 routes bottleneck at 100 sat,
+// 5 at 200, 3 at 400. At frac 0.5 a 100-sat payment needs a 200-sat bottleneck.
+const routeCdfs = M.makeRouteCdfs({
+  "1": [[100, 2], [200, 5], [400, 3]],
+  "3": [[100, 6], [200, 3], [400, 1]],
+});
+approx(M.routeRoutability(routeCdfs["1"], 100, 0.5), 0.8, 1e-12,
+  "one hop: 8 of 10 sampled routes clear");
+approx(M.routeRoutability(routeCdfs["3"], 100, 0.5), 0.4, 1e-12,
+  "three hops: 4 of 10 clear");
+// Longer routes are a different population of pairs, not a power of the
+// shorter one -- the whole point of measuring rather than composing.
+ok(M.routeRoutability(routeCdfs["3"], 100, 0.5) !==
+  Math.pow(M.routeRoutability(routeCdfs["1"], 100, 0.5), 3),
+  "route share is measured, not perHop^hops");
+eq(M.routeRoutability(routeCdfs["1"], 100, 0), 0, "zero frac -> nothing routes");
+eq(M.routeRoutability(routeCdfs["1"], 100, NaN), 0, "NaN frac -> nothing routes");
+eq(M.routeRoutability(undefined, 100, 0.5), 0, "no sample for that hop -> 0");
+eq(M.routeRoutability(routeCdfs["1"], 1, 0.5), 1, "tiny payment clears every route");
+eq(M.routeRoutability(routeCdfs["1"], 1e9, 0.5), 0, "huge payment clears none");
+eq(Object.keys(M.makeRouteCdfs({})).length, 0, "no hop buckets -> no cdfs");
 
 // --- percentileSat: nearest rank over the same histogram.
 // [[100,3],[200,5],[300,2]] -> 100 100 100 200 200 200 200 200 300 300
