@@ -589,13 +589,13 @@
     const m = params.typeMetrics(activeType());
     const pts = curvePoints();
 
+    // Live parameter values only — the intro above carries the instructions.
     $("rout-caption").textContent =
       "One peer may push " + (m.peerGeneralFrac * 100).toFixed(2) +
       "% of a channel's max_htlc through general (k = " + m.k + " of " +
       m.slots.general + "), counting edges " +
       (state.weighting === "value" ? "by advertised liquidity" : "one for one") +
-      ". Type a payment size or drag across either plot; the shaded band is $" +
-      TYPICAL[0] + "–$" + TYPICAL[1] + ".";
+      ". The shaded band is $" + TYPICAL[0] + "–$" + TYPICAL[1] + ".";
 
     $("rout-controls-slot").replaceChildren(renderControls());
     $("rout-tiles").replaceChildren(renderTiles());

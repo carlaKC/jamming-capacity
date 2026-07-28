@@ -571,15 +571,6 @@ body.dragging-cursor { cursor: ew-resize; user-select: none; }
   white-space: nowrap;
 }
 
-.intro-cols {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px 34px;
-}
-.intro-cols p { margin: 0; }
-@media (max-width: 1000px) { .intro-cols { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 700px) { .intro-cols { grid-template-columns: 1fr; } }
-
 .method-head {
   font-family: var(--serif);
   font-size: 15px;
@@ -587,44 +578,5 @@ body.dragging-cursor { cursor: ew-resize; user-select: none; }
   color: var(--ink);
   margin: 22px 0 10px;
 }
-
-/* Three parallel steps, so they sit side by side rather than stacking. */
-.method-steps {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin: 0 0 22px;
-  padding: 0;
-  list-style: none;
-  counter-reset: none;
-}
-.method-steps li {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px 16px;
-  box-shadow: var(--shadow-soft);
-}
-.method-steps strong {
-  display: block;
-  font-family: var(--serif);
-  font-size: 14.5px;
-  font-weight: 650;
-  color: var(--ink);
-  margin: 6px 0 6px;
-}
-.step-n {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 21px;
-  height: 21px;
-  border-radius: 999px;
-  background: var(--moss);
-  color: var(--pale);
-  font-size: 11.5px;
-  font-weight: 800;
-}
-@media (max-width: 900px) { .method-steps { grid-template-columns: 1fr; } }
 
 .caveats strong { font-weight: 800; color: var(--ink); }

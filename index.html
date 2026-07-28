@@ -107,67 +107,20 @@
       <summary class="results-head">General-bucket routability</summary>
       <div class="section-intro">
         <p>
-          Everything above is per channel. This composes the per-hop figure
-          along a route, which is where the general bucket's limits bind:
-          clearance multiplies, so a route is far worse than its hops suggest.
+          Here we extend the distribution above from single channels to whole
+          routes. The per-hop curve is the share of edges that can carry the
+          payment in the general bucket; since a payment only succeeds if every
+          hop admits it, we treat hops as independent and raise that share to
+          the power of the route length, so an <code>h</code>-hop route clears
+          with probability <code>(per-hop)<sup>h</sup></code>. The shaded wedge
+          between the two curves is what composing hops costs.
         </p>
-
-        <h3 class="method-head">How the curves are computed</h3>
-        <ol class="method-steps">
-          <li>
-            <span class="step-n">1</span>
-            <strong>Per-channel limit</strong>
-            The largest single HTLC one peer can push through general is its
-            <code>k</code>-slot allocation's worth of the bucket's liquidity —
-            a fixed fraction of the edge's advertised <code>max_htlc</code>,
-            the same fraction the tables above use.
-          </li>
-          <li>
-            <span class="step-n">2</span>
-            <strong>Per hop</strong>
-            Invert it: a payment needs an edge of at least
-            <code>payment ÷ fraction</code>. The per-hop curve is the share of
-            the kept edge set at or above that, swept across the payment axis —
-            one binary search per sample, 160 samples per curve.
-          </li>
-          <li>
-            <span class="step-n">3</span>
-            <strong>Per route</strong>
-            A route clears only if every hop clears, so with hops treated as
-            independent draws an <code>h</code>-hop route clears with
-            probability <code>(per-hop)<sup>h</sup></code>. The chart draws
-            <code>h = 3</code>; the heatmap sweeps <code>h = 1…6</code>.
-          </li>
-        </ol>
-
-        <div class="intro-cols">
-          <p>
-            <strong>The two weightings.</strong> By count is
-            <code>qualifying edges ÷ all edges</code>. By liquidity is
-            <code>Σ max_htlc of qualifying edges ÷ Σ max_htlc of all edges</code>,
-            computed from a parallel suffix-sum over the same histogram, so
-            large edges count for more. Neither is the share of real
-            <em>payments</em> that clear — that needs traffic data nobody
-            publishes — and the two diverge by an order of magnitude at ordinary
-            payment sizes, which is the honest measure of how much the answer
-            depends on where you look.
-          </p>
-          <p>
-            <strong>The chart.</strong> Log payment axis over five decades. The
-            shaded wedge is the difference between the two curves, i.e. what
-            composing three hops costs: since the per-hop share is below one,
-            raising it to a power falls away fast, and a hop clearing 80% of the
-            time leaves a three-hop route at about half. The vertical line is
-            the selected payment size and can be dragged.
-          </p>
-          <p>
-            <strong>The heatmap.</strong> The same per-hop curve raised to each
-            power from one to six. Columns are 25 equal bins across the log
-            axis, each taking the payment size at its midpoint; shading is five
-            bands of a single-hue ramp, so a step in colour is a 20-point step
-            in clearance. Dragging across it moves the same cursor.
-          </p>
-        </div>
+        <p>
+          Note that the weighting toggle switches between counting every edge
+          once and weighting each by its advertised <code>max_htlc</code>, and
+          that you can set the payment size by typing it or by dragging across
+          either plot.
+        </p>
       </div>
       <p class="table-caption" id="rout-caption"></p>
       <div id="rout-controls-slot"></div>
