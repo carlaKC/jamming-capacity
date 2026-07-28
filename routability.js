@@ -487,6 +487,12 @@
 
   // ---------------- controls ----------------
 
+  // Sits under the toggle: which population the per-hop share is taken over.
+  const WEIGHT_NOTES = {
+    value: "channels count in proportion to their max_htlc",
+    count: "every channel counts once, whatever its size",
+  };
+
   function select(label, values, selected, format, onPick) {
     const sel = el("select", "corner-select");
     sel.setAttribute("aria-label", label);
@@ -517,6 +523,7 @@
       [...params.channelTypes].sort((a, b) => b - a), activeType(),
       (n) => fmtInt(n) + " slots", (n) => { state.type = n; }));
 
+    const weighting = el("div", "rout-weighting");
     const toggle = el("div", "mode-toggle");
     toggle.setAttribute("role", "group");
     toggle.setAttribute("aria-label", "Edge weighting");
@@ -526,7 +533,9 @@
       btn.addEventListener("click", () => { state.weighting = key; render(); });
       toggle.appendChild(btn);
     }
-    row.appendChild(toggle);
+    weighting.appendChild(toggle);
+    weighting.appendChild(el("p", "control-note", WEIGHT_NOTES[state.weighting]));
+    row.appendChild(weighting);
 
     const pay = el("input", "pay-input");
     pay.type = "number";
@@ -588,14 +597,6 @@
     if (!mounted) return;
     const m = params.typeMetrics(activeType());
     const pts = curvePoints();
-
-    // Live parameter values only — the intro above carries the instructions.
-    $("rout-caption").textContent =
-      "One peer may push " + (m.peerGeneralFrac * 100).toFixed(2) +
-      "% of a channel's max_htlc through general (k = " + m.k + " of " +
-      m.slots.general + "), counting edges " +
-      (state.weighting === "value" ? "by advertised liquidity" : "one for one") +
-      ". The shaded band is $" + TYPICAL[0] + "–$" + TYPICAL[1] + ".";
 
     $("rout-controls-slot").replaceChildren(renderControls());
     $("rout-tiles").replaceChildren(renderTiles());
