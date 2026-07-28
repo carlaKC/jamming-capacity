@@ -557,9 +557,10 @@ body.dragging-cursor { cursor: ew-resize; user-select: none; }
   line-height: 1.7;
   color: var(--ink-2);
 }
+/* Full width, like the captions and the tables below them. A narrower measure
+   wraps a one-line summary into a stub and leaves the row half empty. */
 .section-intro > p {
   margin: 0 0 16px;
-  max-width: 92ch;
   font-size: 15px;
 }
 .section-intro strong { font-weight: 800; color: var(--ink); }
