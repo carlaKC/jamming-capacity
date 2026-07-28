@@ -485,35 +485,6 @@
 
   const hideTip = () => tooltipEl.classList.add("hidden");
 
-  // ---------------- table view ----------------
-
-  // Every value in the charts is reachable here too — the charts enhance it,
-  // they do not gate it.
-  function renderTableView() {
-    const table = el("table");
-    const thead = el("thead");
-    const hr = el("tr");
-    hr.appendChild(el("th", "row-head", "Payment"));
-    hr.appendChild(el("th", null, "One hop"));
-    for (const h of HEAT_HOPS.slice(1)) hr.appendChild(el("th", null, h + " hops"));
-    thead.appendChild(hr);
-    table.appendChild(thead);
-    const tbody = el("tbody");
-    for (const usd of [0.1, 1, 5, 10, 50, 100, 500, 1000, 10000]) {
-      const hop = perHopAt(usd);
-      const tr = el("tr");
-      tr.appendChild(el("th", "row-head", fmtUsd(usd)));
-      for (const h of HEAT_HOPS) {
-        tr.appendChild(el("td", null, fmtPct1(M.routeRoutability(hop, h))));
-      }
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
-    const wrap = el("div", "table-wrap");
-    wrap.appendChild(table);
-    return wrap;
-  }
-
   // ---------------- controls ----------------
 
   function select(label, values, selected, format, onPick) {
@@ -619,16 +590,12 @@
     const pts = curvePoints();
 
     $("rout-caption").textContent =
-      "At these settings one peer may push " +
-      (m.peerGeneralFrac * 100).toFixed(2) + "% of a channel's max_htlc " +
-      "through general (k = " + m.k + " of " + m.slots.general +
-      " general slots), counting channels " +
-      (state.weighting === "value"
-        ? "weighted by advertised liquidity"
-        : "one edge, one vote") +
-      ". Set the payment size by typing it, or by dragging across the chart " +
-      "or the heatmap; the shaded band is $" + TYPICAL[0] + "–$" +
-      TYPICAL[1] + ", where everyday payments sit.";
+      "One peer may push " + (m.peerGeneralFrac * 100).toFixed(2) +
+      "% of a channel's max_htlc through general (k = " + m.k + " of " +
+      m.slots.general + "), counting edges " +
+      (state.weighting === "value" ? "by advertised liquidity" : "one for one") +
+      ". Type a payment size or drag across either plot; the shaded band is $" +
+      TYPICAL[0] + "–$" + TYPICAL[1] + ".";
 
     $("rout-controls-slot").replaceChildren(renderControls());
     $("rout-tiles").replaceChildren(renderTiles());
@@ -636,7 +603,6 @@
     $("rout-legend").replaceChildren(renderLegend());
     $("rout-heat").replaceChildren(renderHeatmap(heatColumns()));
     $("rout-heat-legend").replaceChildren(renderRampLegend());
-    $("rout-table").replaceChildren(renderTableView());
   }
 
   // A legend is always present for two series; the swatch carries identity and

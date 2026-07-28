@@ -261,7 +261,10 @@ button.small:focus-visible, .tab:focus-visible {
 .tab:hover { color: var(--ink); }
 .tab.active { background: var(--moss); color: var(--pale); box-shadow: var(--shadow-soft); }
 
-.table-caption { font-size: 13px; color: var(--muted); margin: 0 0 12px; max-width: 80ch; }
+/* Captions sit directly above a full-width table, so a narrow measure leaves
+   the right half of the row empty. They are one or two sentences — let them
+   run the width rather than wrap into a ragged stub. */
+.table-caption { font-size: 13px; color: var(--muted); margin: 0 0 12px; }
 
 .results-head {
   font-family: var(--serif);
@@ -427,31 +430,6 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
 .tt-line { color: #C9C7B8; }
 
 /* ---- routability visualizer ---- */
-.sub-section { margin: 18px 0 0; }
-.sub-section > summary {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--muted);
-  cursor: pointer;
-  list-style: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
-}
-.sub-section > summary::-webkit-details-marker { display: none; }
-.sub-section > summary::before {
-  content: "";
-  width: 0; height: 0;
-  border-left: 6px solid var(--muted);
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  transition: transform 200ms ease;
-}
-.sub-section[open] > summary::before { transform: rotate(90deg); }
-.sub-section > summary:hover { color: var(--ink); }
-.sub-section > div { margin-top: 10px; }
-
 .rout-controls {
   display: flex;
   flex-wrap: wrap;
