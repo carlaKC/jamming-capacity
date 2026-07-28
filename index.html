@@ -107,13 +107,24 @@
       <summary class="results-head">General-bucket routability</summary>
       <div class="section-intro">
         <p>
-          Here we extend the distribution above from single channels to whole
-          routes. The per-hop curve is the share of edges that can carry the
-          payment in the general bucket; since a payment only succeeds if every
-          hop admits it, we treat hops as independent and raise that share to
-          the power of the route length, so an <code>h</code>-hop route clears
-          with probability <code>(per-hop)<sup>h</sup></code>. The shaded wedge
-          between the two curves is what composing hops costs.
+	  This section attempts to provide a visual representation of whether
+	  payments will fit into the general bucket, across different route
+	  lengths. It uses the following methodology:
+         </p>
+        <ul class="method-bullets">
+          <li>Start with the set of directed channels.</li>
+          <li>
+            Calculate the portion of them that can accommodate the chosen
+            payment in their general bucket.
+          </li>
+          <li>Take that portion as the success probability for a single hop.</li>
+          <li>
+            Treat hops as independent samples to get the probability of routing
+            in general.
+          </li>
+        </ul>
+        <p>
+          This is, of course, a very crude approximation.
         </p>
         <p>
           Note that the weighting toggle switches between counting every edge
@@ -137,27 +148,14 @@
       <h3 class="method-head">What this does not account for</h3>
       <ul class="caveats">
         <li>
-          <strong>Hops are not really independent.</strong> A payment is routed
-          deliberately, and pathfinding steers it towards well-funded channels
-          rather than sampling the graph at random. Raising the per-hop share to
-          a power therefore understates the truth, so read the route curve as a
-          lower bound rather than an estimate. Replacing it with sampled real
-          shortest paths would tighten the number without changing the shape.
-        </li>
+          <strong>Hops are not really independent.</strong> Pathfinding steers
+	  towards well funded channels rather than sampling the grap at random
+	  so the route curve should be considered a lower bound.
+	</li>
         <li>
-          <strong>Two of the three inputs are assumptions.</strong> Gossip
-          publishes neither <code>max_htlc_value_in_flight</code> nor
-          <code>max_accepted_htlcs</code>, so this page stands in each
-          direction's advertised <code>max_htlc</code> for the first — the
-          observable lower bound on it — and takes the slot count from the
-          parameters above. Every figure here moves with those choices, which is
-          why they are controls rather than constants.
-        </li>
-        <li>
-          <strong>The graph is a snapshot of what nodes advertise</strong>, not
-          of what they will actually do. A channel can advertise a large
-          <code>max_htlc</code> and still have no liquidity on the side you need.
-        </li>
+          <strong>Unknown max_htlc_value_in_flight.</strong>  This value is not
+	  gossiped. We use <code>max_htlc_msat</code> as a proxy.
+	  </li>
       </ul>
     </details>
   </section>
