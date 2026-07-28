@@ -556,44 +556,97 @@ body.dragging-cursor { cursor: ew-resize; user-select: none; }
 .ramp-step { width: 26px; height: 11px; border-radius: 2px; }
 
 .caveats {
-  margin: 12px 0 0;
-  padding-left: 22px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px 34px;
+  margin: 10px 0 0;
+  padding: 0 0 0 18px;
   font-size: 13px;
   line-height: 1.7;
   color: var(--ink-2);
-  max-width: 78ch;
 }
-.caveats li { margin-bottom: 7px; }
+.caveats li { margin: 0; }
+@media (max-width: 1000px) { .caveats { grid-template-columns: 1fr; } }
 .caveats code { font-size: 11.5px; background: var(--stone); padding: 1px 5px; border-radius: 5px; }
 
-/* ---- section prose ---- */
+/* ---- section prose ----
+   Runs the full width of the tables it introduces. A single column at that
+   width would be an unreadable measure, so the body splits into columns and
+   each keeps a sane line length. */
 .section-intro {
-  max-width: 78ch;
-  margin: 0 0 18px;
+  margin: 0 0 20px;
   font-size: 14px;
   line-height: 1.7;
   color: var(--ink-2);
 }
-.section-intro p { margin: 0 0 12px; }
+.section-intro > p {
+  margin: 0 0 16px;
+  max-width: 92ch;
+  font-size: 15px;
+}
 .section-intro strong { font-weight: 800; color: var(--ink); }
 .section-intro code, .caveats code {
   font-size: 12.5px;
   background: var(--stone);
   padding: 1px 5px;
   border-radius: 5px;
+  white-space: nowrap;
 }
+
+.intro-cols {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px 34px;
+}
+.intro-cols p { margin: 0; }
+@media (max-width: 1000px) { .intro-cols { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 700px) { .intro-cols { grid-template-columns: 1fr; } }
 
 .method-head {
   font-family: var(--serif);
   font-size: 15px;
   font-weight: 650;
   color: var(--ink);
-  margin: 20px 0 8px;
+  margin: 22px 0 10px;
 }
-.method-list {
-  margin: 0 0 12px;
-  padding-left: 22px;
+
+/* Three parallel steps, so they sit side by side rather than stacking. */
+.method-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin: 0 0 22px;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
 }
-.method-list li { margin-bottom: 9px; }
-.method-list strong { font-weight: 800; color: var(--ink); }
-.caveats strong { font-weight: 800; color: var(--ink-2); }
+.method-steps li {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow-soft);
+}
+.method-steps strong {
+  display: block;
+  font-family: var(--serif);
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--ink);
+  margin: 6px 0 6px;
+}
+.step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 21px;
+  height: 21px;
+  border-radius: 999px;
+  background: var(--moss);
+  color: var(--pale);
+  font-size: 11.5px;
+  font-weight: 800;
+}
+@media (max-width: 900px) { .method-steps { grid-template-columns: 1fr; } }
+
+.caveats strong { font-weight: 800; color: var(--ink); }
