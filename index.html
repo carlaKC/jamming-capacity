@@ -124,15 +124,9 @@
           </li>
         </ul>
         <p>
-          This is, of course, a very crude approximation.
+          This is, of course, a very crude approximation!
         </p>
-        <p>
-          Note that the weighting toggle switches between counting every edge
-          once and weighting each by its advertised <code>max_htlc</code>, and
-          that you can set the payment size by typing it or by dragging across
-          either plot.
-        </p>
-      </div>
+              </div>
       <p class="table-caption" id="rout-caption"></p>
       <div id="rout-controls-slot"></div>
       <div id="rout-tiles"></div>
@@ -155,6 +149,11 @@
         <li>
           <strong>Unknown max_htlc_value_in_flight.</strong>  This value is not
 	  gossiped. We use <code>max_htlc_msat</code> as a proxy.
+	  </li>
+        <li>
+          <strong>One HTLC in flight.</strong> We assume a single HTLC occupying
+	  the outgoing channel's allocation on its incoming channel, and do not
+	  account for liquidity distribution.
 	  </li>
       </ul>
     </details>
