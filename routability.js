@@ -43,6 +43,10 @@
   const TYPICAL = [10, 200];
   const ROUTE_HOPS = 3;
   const ALL_HOPS = [1, 2, 3, 4, 5, 6];
+  // Presets for the matrix's corner dropdown, matching the distribution
+  // table's thresholds. Dragging still lands on arbitrary amounts, which the
+  // dropdown picks up as an extra option.
+  const PAYMENTS = [1, 5, 10, 25, 50, 100, 250, 500];
   const HEAT_COLS = 25;          // half-decade-ish columns across the span
   const CURVE_POINTS = 160;
 
@@ -343,6 +347,10 @@
       refs.payInput.value = roundForInput(state.payUsd);
     }
     $("rout-tiles").replaceChildren(renderTiles());
+    // The matrix is shaded at the payment size too, so a drag has to carry it
+    // along or the grid silently describes the old amount.
+    $("rout-matrix").replaceChildren(renderMatrix());
+    renderCaption();
   }
 
   // Dragging lands on arbitrary reals; show something a person would type.
@@ -570,8 +578,19 @@
     const wrap = el("div", "matrix-wrap");
     const table = el("table", "persona-matrix");
 
+    // The corner carries the payment size, as the percentile table's corner
+    // carries its price. Dragging the chart or heatmap can land between the
+    // presets, so the live value joins the list when it is not already there.
+    const corner = el("th", "matrix-corner");
+    const options = PAYMENTS.includes(state.payUsd)
+      ? PAYMENTS
+      : [...PAYMENTS, state.payUsd].sort((a, b) => a - b);
+    // Not fmtUsd: it rounds to whole dollars and abbreviates thousands, so a
+    // dragged $7.50 would be labelled $8 against its own value.
+    corner.appendChild(select("Payment size", options, state.payUsd,
+      (v) => "$" + roundForInput(v), (v) => { state.payUsd = clampUsd(v); }));
     const head = el("tr");
-    head.appendChild(el("th", "matrix-corner", "paying ↓ / paid →"));
+    head.appendChild(corner);
     for (const t of TIERS) {
       const th = el("th", null, t.label);
       th.title = t.blurb;
@@ -644,6 +663,16 @@
   const tierLabel = (key) =>
     (TIERS.find((t) => t.key === key) || { label: key }).label;
 
+  // The corner cell holds the payment dropdown, so the axes are named here.
+  // Everything below the matrix describes the selected cell, so say which.
+  function renderCaption() {
+    $("rout-caption").textContent =
+      "Rows are who pays, columns who is paid, shaded against the strongest " +
+      "cell. Everything below is for a " + tierLabel(state.src).toLowerCase() +
+      " node paying a " + tierLabel(state.dst).toLowerCase() + " node — " +
+      fmtInt((cell().all || {}).total || 0) + " sampled routes.";
+  }
+
   // ---------------- tiles ----------------
 
   function renderTiles() {
@@ -692,13 +721,7 @@
     $("rout-legend").replaceChildren(renderLegend());
     $("rout-heat").replaceChildren(renderHeatmap(heatColumns()));
     $("rout-heat-legend").replaceChildren(renderRampLegend());
-    // Everything below the matrix describes the selected cell, so say which.
-    $("rout-caption").textContent =
-      "Share of routes clearing the general bucket at " + fmtUsd(state.payUsd) +
-      ", shaded against the strongest cell. Everything below is for a " +
-      tierLabel(state.src).toLowerCase() + " node paying a " +
-      tierLabel(state.dst).toLowerCase() + " node — " +
-      fmtInt((cell().all || {}).total || 0) + " sampled routes.";
+    renderCaption();
   }
 
   // A legend is always present for two series; the swatch carries identity and

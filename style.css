@@ -450,12 +450,7 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
   white-space: nowrap;
 }
 .persona-matrix th.row-head { text-align: right; }
-.matrix-corner {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--muted);
-  text-align: right;
-}
+.matrix-corner { text-align: right; padding: 4px; }
 .matrix-cell { padding: 0; }
 .matrix-btn {
   font: inherit;
