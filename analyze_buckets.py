@@ -236,20 +236,21 @@ def route_routability(route_cdf, sat, frac):
 
 
 def make_route_cdfs(route_hist):
-    """{(src, dst, hops): Counter({bottleneck: routes})} -> nested Cdfs.
+    """{(src, dst): {"first": Counter, "best": {budget: Counter}}} -> Cdfs.
 
-    Returns cdfs[src][dst][hops], plus cdfs[src][dst]["all"] merging every
-    route length -- the hop mix is part of what paying that kind of node is
-    like, so a cell should not be conditioned on it.
+    Returns cdfs[src][dst] = {"first": Cdf, "best": {budget: Cdf}}. Both series
+    cover the same sampled pairs and bracket the answer: "first" is the route a
+    fee-optimising sender picks, "best" is the widest path within a hop budget,
+    where retrying converges.
     """
-    merged = {}
-    for (src, dst, hops), counts in route_hist.items():
-        cell = merged.setdefault(src, {}).setdefault(dst, {})
-        cell[hops] = counts
-        cell.setdefault("all", Counter()).update(counts)
-    return {src: {dst: {h: make_cdf(sorted(c.items())) for h, c in cell.items()}
-                  for dst, cell in by_dst.items()}
-            for src, by_dst in merged.items()}
+    out = {}
+    for (src, dst), entry in route_hist.items():
+        out.setdefault(src, {})[dst] = {
+            "first": make_cdf(sorted(entry["first"].items())),
+            "best": {h: make_cdf(sorted(c.items()))
+                     for h, c in entry["best"].items()},
+        }
+    return out
 
 
 def percentile_sat(cdf, p):
@@ -463,17 +464,27 @@ def _rout_header(cfg, metrics):
     return n, m, cfg["percentile_price"], m["peer_general_frac"]
 
 
-def print_routability_matrix(route_cdfs, cfg, metrics, col=12):
-    """Who pays whom: clearance for every ordered pair of routing roles."""
+def _cell_cdf(route_cdfs, src, dst, kind, budget=None):
+    cell = route_cdfs.get(src, {}).get(dst)
+    if not cell:
+        return None
+    return cell["best"].get(budget or MAX_HOPS) if kind == "best" else cell["first"]
+
+
+def print_routability_matrix(route_cdfs, cfg, metrics, col=14):
+    """Who pays whom, as a band: best available over first attempt."""
     n, m, price, frac = _rout_header(cfg, metrics)
 
     print("-" * 78)
     print(f"General-bucket routability by role — {n}-slot channels")
-    print(f"Share of sampled routes clearing general with no reputation "
+    print(f"Share of sampled pairs routable in general with no reputation "
           f"(k = {m['k']}).")
     print("Rows are the sender's role, columns the receiver's. The sender's own")
     print("first channel is never gated, so the receiver's role dominates.")
-    print("Cells are sampled separately: compare them, do not average them.")
+    print(f"Each cell is 'best available within {MAX_HOPS} hops / first attempt':")
+    print("the first is what the topology permits, the second what one")
+    print("fee-optimising try gets. Cells are sampled separately: compare")
+    print("them, do not average them.")
     print("-" * 78)
 
     for usd in cfg["payments"]:
@@ -482,50 +493,56 @@ def print_routability_matrix(route_cdfs, cfg, metrics, col=12):
         for src in TIERS:
             row = f"    {src:<12}"
             for dst in TIERS:
-                cdf = route_cdfs.get(src, {}).get(dst, {}).get("all")
                 sat = usd_to_sat(usd, price)
-                row += (f"{route_routability(cdf, sat, frac) * 100:>{col - 1}.1f}%"
-                        if cdf else f"{'-':>{col}}")
+                best = _cell_cdf(route_cdfs, src, dst, "best")
+                first = _cell_cdf(route_cdfs, src, dst, "first")
+                if best is None:
+                    row += f"{'-':>{col}}"
+                    continue
+                pair = (f"{route_routability(best, sat, frac) * 100:.1f}/"
+                        f"{route_routability(first, sat, frac) * 100:.1f}%")
+                row += f"{pair:>{col}}"
             print(row)
         print()
 
-    print("    " + f"{'routes':<12}" + "".join(f"{d:>{col}}" for d in TIERS))
+    print("    " + f"{'pairs':<12}" + "".join(f"{d:>{col}}" for d in TIERS))
     for src in TIERS:
         row = f"    {src:<12}"
         for dst in TIERS:
-            cdf = route_cdfs.get(src, {}).get(dst, {}).get("all")
+            cdf = _cell_cdf(route_cdfs, src, dst, "first")
             row += f"{cdf.total if cdf else 0:>{col},.0f}"
         print(row)
     print()
 
 
 def print_routability_table(route_cdfs, cfg, metrics, col=9):
-    """Clearance by route length, for one sender/receiver pair."""
+    """What each extra hop of route length buys, for one sender/receiver pair."""
     n, m, price, frac = _rout_header(cfg, metrics)
     src, dst = cfg["route_pair"]
-    cell = route_cdfs.get(src, {}).get(dst, {})
-    hops = [h for h in ROUTE_HOPS if h in cell]
+    cell = route_cdfs.get(src, {}).get(dst)
+    budgets = sorted(cell["best"]) if cell else []
 
     print("-" * 78)
-    print(f"General-bucket routability by route length — {src} pays {dst}")
-    print("A hop is a forwarding node, so each column is its own sample of")
-    print("node pairs and the columns are not nested.")
+    print(f"General-bucket routability by hop budget — {src} pays {dst}")
+    print("Share of the same sampled pairs reachable in general when the sender")
+    print("will route over at most this many forwarding nodes. Every column")
+    print("covers the same pairs, so these are nested: more hops never hurts.")
     print("-" * 78)
 
-    if not hops:
-        print(f"  no sampled routes from {src} to {dst}\n")
+    if not budgets:
+        print(f"  no sampled pairs from {src} to {dst}\n")
         return
 
     print("  " + f"{'Payment':<12}" + "".join(
-        f"{str(h) + (' hop' if h == 1 else ' hops'):>{col}}" for h in hops))
+        f"{'<=' + str(h):>{col}}" for h in budgets) + f"{'first try':>{col + 2}}")
     for usd in cfg["payments"]:
         sat = usd_to_sat(usd, price)
         row = f"  {'$' + _compact_usd(usd):<12}"
-        for h in hops:
-            row += f"{route_routability(cell[h], sat, frac) * 100:>{col - 1}.1f}%"
+        for h in budgets:
+            row += f"{route_routability(cell['best'][h], sat, frac) * 100:>{col - 1}.1f}%"
+        row += f"{route_routability(cell['first'], sat, frac) * 100:>{col + 1}.1f}%"
         print(row)
-    print("  " + f"{'routes':<12}" + "".join(
-        f"{cell[h].total:>{col},.0f}" for h in hops))
+    print(f"  {'pairs':<12}{cell['first'].total:>{col},.0f}")
     print()
 
 
@@ -693,21 +710,28 @@ def self_test():
     # Route bottlenecks, not per-channel values. Mirrors math.test.js: at
     # frac 0.5 a 100-sat payment needs a 200-sat bottleneck.
     route_cdfs = make_route_cdfs({
-        ("terminal", "terminal", 1): Counter({100: 2, 200: 5, 400: 3}),
-        ("terminal", "terminal", 3): Counter({100: 6, 200: 3, 400: 1}),
-        ("core", "core", 2): Counter({400: 4}),
+        ("terminal", "terminal"): {
+            "first": Counter({100: 6, 200: 3, 400: 1}),
+            "best": {1: Counter({0: 4, 200: 6}),
+                     6: Counter({100: 2, 200: 5, 400: 3})},
+        },
+        ("core", "core"): {"first": Counter({400: 4}),
+                           "best": {6: Counter({400: 4})}},
     })
     tt = route_cdfs["terminal"]["terminal"]
-    assert abs(route_routability(tt[1], 100, 0.5) - 0.8) < 1e-12
-    assert abs(route_routability(tt[3], 100, 0.5) - 0.4) < 1e-12
-    assert route_routability(tt[1], 100, 0) == 0.0
+    assert abs(route_routability(tt["first"], 100, 0.5) - 0.4) < 1e-12
+    assert abs(route_routability(tt["best"][6], 100, 0.5) - 0.8) < 1e-12
+    # Retrying can only help, over the same population of pairs.
+    assert (route_routability(tt["best"][6], 100, 0.5)
+            >= route_routability(tt["first"], 100, 0.5))
+    assert tt["first"].total == tt["best"][6].total
+    # A pair out of reach within the budget is stored as a zero bottleneck.
+    assert abs(route_routability(tt["best"][1], 100, 0.5) - 0.6) < 1e-12
+    assert route_routability(tt["first"], 100, 0) == 0.0
     assert route_routability(None, 100, 0.5) == 0.0
-    assert route_routability(tt[1], 1, 0.5) == 1.0
-    assert route_routability(tt[1], 10**9, 0.5) == 0.0
-    # "all" merges the hop buckets rather than conditioning on route length.
-    assert tt["all"].total == 20, tt["all"].total
-    assert abs(route_routability(tt["all"], 100, 0.5) - 0.6) < 1e-12
-    assert route_routability(route_cdfs["core"]["core"]["all"], 100, 0.5) == 1.0
+    assert route_routability(tt["first"], 1, 0.5) == 1.0
+    assert route_routability(tt["first"], 10**9, 0.5) == 0.0
+    assert route_routability(route_cdfs["core"]["core"]["first"], 100, 0.5) == 1.0
     assert "core" not in route_cdfs["terminal"], route_cdfs["terminal"].keys()
     assert make_route_cdfs({}) == {}
     # Ordinal row labels match app.js's fmtPctile.

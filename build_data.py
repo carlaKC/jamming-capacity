@@ -40,6 +40,7 @@ Usage:
 
 import argparse
 import heapq
+import math
 import json
 import os
 import random
@@ -76,6 +77,11 @@ CORE_TRANSIT_SHARE = 0.90
 
 # Ordered so the page can lay the matrix out directly.
 TIERS = ("terminal", "peripheral", "core")
+
+INF = math.inf
+
+# Bottlenecks are stored to this many significant figures; see quantize().
+SIG_FIGS = 3
 
 
 def _int(value):
@@ -263,6 +269,38 @@ def transit_counts(adjacency, sources, seed):
     return through
 
 
+def widest_within(adjacency, source, max_hops):
+    """best[h - 1][node] = widest bottleneck reachable using <= h gated channels.
+
+    The sender's own first channel is never gated, so the search starts from
+    the source's peers with no constraint yet. Relaxation is strictly
+    level-by-level -- a node updated in round h is only expanded in round
+    h + 1 -- so each snapshot really is "within h hops" rather than whatever
+    an in-place sweep happened to propagate.
+    """
+    best = {}
+    for peer, _, _ in adjacency.get(source, ()):
+        if peer != source:
+            best[peer] = INF
+    frontier = dict(best)
+    out = []
+    for _ in range(max_hops):
+        changed = {}
+        for node, width in frontier.items():
+            for peer, sat, _ in adjacency.get(node, ()):
+                candidate = width if width < sat else sat
+                if candidate > best.get(peer, 0):
+                    best[peer] = candidate
+                    changed[peer] = candidate
+        frontier = changed
+        out.append(dict(best))
+        if not frontier:
+            # Nothing improved, so longer budgets cannot either.
+            out.extend([out[-1]] * (max_hops - len(out)))
+            break
+    return out
+
+
 def node_universe(adjacency):
     """Every node a route can touch.
 
@@ -306,12 +344,28 @@ def classify_nodes(adjacency, through, core_share=CORE_TRANSIT_SHARE):
 
 
 def sample_matrix(adjacency, tier, sources_per_tier, per_dest_tier, seed):
-    """Sample routes between every ordered pair of roles.
+    """Sample node pairs between every ordered pair of roles.
 
     Stratified, not uniform: core-to-core is 0.2% x 0.2% of a uniform draw and
     would never fill in. Each cell instead gets its own quota, which means cell
     figures are comparable to each other but there is no meaningful "overall"
     number to read off the matrix.
+
+    Each pair yields two bottlenecks, which bracket the answer:
+
+    first  the route a fee-optimising sender actually picks -- shortest, then
+           cheapest. Route choice never looks at channel size, exactly as a
+           sender's does not, so this is what one attempt gets you.
+    best   the widest path available within a hop budget. A sender who keeps
+           retrying converges here. The general-bucket limit is not gossiped,
+           so nobody can aim at this deliberately, but it is what the topology
+           permits.
+
+    Both are properties of the pair rather than of a payment size, so both
+    freeze into data.js and stay live under every bucket parameter. Every
+    series covers the same population of pairs, so they are directly
+    comparable -- unlike binning by a route's own length, where each hop count
+    is a different set of pairs.
     """
     htlc = {}
     for node, out in adjacency.items():
@@ -326,8 +380,15 @@ def sample_matrix(adjacency, tier, sources_per_tier, per_dest_tier, seed):
     population = Counter(tier.values())
 
     rng = random.Random(seed)
-    # (src_tier, dst_tier, hops) -> {bottleneck: routes}
-    hist = defaultdict(Counter)
+    # (src_tier, dst_tier) -> {"first": Counter, "best": {budget: Counter}}
+    hist = {}
+
+    def cell(src, dst):
+        return hist.setdefault((src, dst), {
+            "first": Counter(),
+            "best": {h: Counter() for h in range(1, MAX_HOPS + 1)},
+        })
+
     stats = {"sampled": 0, "direct": 0, "tooLong": 0,
              "tiers": {t: population[t] for t in TIERS},
              "senders": {t: len(by_tier[t]) for t in TIERS}}
@@ -340,6 +401,7 @@ def sample_matrix(adjacency, tier, sources_per_tier, per_dest_tier, seed):
                  else rng.sample(pool, sources_per_tier))
         for source in picks:
             prev = shortest_paths(adjacency, source)
+            widest = widest_within(adjacency, source, MAX_HOPS)
             reach = defaultdict(list)
             for node in prev:
                 if node != source:
@@ -361,18 +423,43 @@ def sample_matrix(adjacency, tier, sources_per_tier, per_dest_tier, seed):
                     if hops > MAX_HOPS:
                         stats["tooLong"] += 1
                         continue
-                    hist[(src_tier, dst_tier, hops)][
-                        route_bottleneck(path, htlc)] += 1
+                    entry = cell(src_tier, dst_tier)
+                    entry["first"][route_bottleneck(path, htlc)] += 1
+                    for budget in range(1, MAX_HOPS + 1):
+                        # 0 when no path of that length reaches the
+                        # destination, which clears nothing.
+                        entry["best"][budget][
+                            widest[budget - 1].get(dest, 0)] += 1
                     stats["sampled"] += 1
     return hist, stats
 
 
+def quantize(value, digits=SIG_FIGS):
+    """Round a bottleneck down to `digits` significant figures.
+
+    Six series per cell at full precision run data.js past 650kB, and the extra
+    digits are noise next to the modelling error. Rounding *down* keeps the
+    figure conservative -- a route never looks wider than it is -- at under 1%.
+    """
+    if value <= 0:
+        return value
+    step = 10 ** max(0, len(str(value)) - digits)
+    return (value // step) * step
+
+
 def matrix_payload(route_hist):
-    """Nest (src, dst, hops) counters as pairs[src][dst][hops] = [[sat, n], ...]."""
+    """pairs[src][dst] = {"first": [[sat, n], ...], "best": {budget: [...]}}."""
+    def as_hist(counts):
+        merged = Counter()
+        for value, n in counts.items():
+            merged[quantize(value)] += n
+        return [[s, c] for s, c in sorted(merged.items())]
     pairs = {}
-    for (src, dst, hops), counts in route_hist.items():
-        pairs.setdefault(src, {}).setdefault(dst, {})[str(hops)] = [
-            [s, c] for s, c in sorted(counts.items())]
+    for (src, dst), entry in route_hist.items():
+        pairs.setdefault(src, {})[dst] = {
+            "first": as_hist(entry["first"]),
+            "best": {str(h): as_hist(c) for h, c in sorted(entry["best"].items())},
+        }
     return pairs
 
 
@@ -455,14 +542,46 @@ def self_test():
     only = classify_nodes(adjacency, Counter({"A": 10, "C": 1}))
     assert only["A"] == "core" and only["C"] == "peripheral", only
 
+    # Widest path. B's only gated option to C is A->C (1500 sat); reaching D
+    # via A->D is 3960000, and B->A->D->C is capped by D->C at 800.
+    wide = widest_within(adjacency, "B", MAX_HOPS)
+    assert wide[0]["C"] == 1500, wide[0]
+    assert wide[0]["D"] == 3960000, wide[0]
+    # Two hops can reach C the long way round, but A->C is still the widest.
+    assert wide[1]["C"] == 1500, wide[1]
+    # The source's own peers carry no gated channel yet, so they sit at INF and
+    # are excluded from sampling as direct payments.
+    assert wide[0]["A"] == INF, wide[0]
+    # From C, one hop reaches B over A->B (1500), not over B's own A-facing
+    # direction: only the forwarder's outbound side is gated.
+    lone = widest_within(adjacency, "C", 1)
+    assert lone[0]["B"] == 1500, lone[0]
+
     route_hist, route_stats = sample_matrix(adjacency, tier, 10, 10,
                                             DEFAULT_SEED)
     assert route_stats["sampled"] > 0, route_stats
     assert route_stats["direct"] > 0, route_stats  # A's neighbours are 0 hops
     assert route_stats["tiers"]["core"] == 1, route_stats
-    assert all(1 <= h <= MAX_HOPS for _, _, h in route_hist), sorted(route_hist)
-    assert all(s in TIERS and d in TIERS for s, d, _ in route_hist), \
+    assert all(s in TIERS and d in TIERS for s, d in route_hist), \
         sorted(route_hist)
+    for entry in route_hist.values():
+        assert sorted(entry["best"]) == list(range(1, MAX_HOPS + 1)), entry
+        # Every series covers the same pairs, so the totals must agree.
+        n = sum(entry["first"].values())
+        for budget, counts in entry["best"].items():
+            assert sum(counts.values()) == n, (budget, n)
+        # A bigger budget can only help.
+        for budget in range(2, MAX_HOPS + 1):
+            lo = sorted(entry["best"][budget - 1].elements())
+            hi = sorted(entry["best"][budget].elements())
+            assert all(a <= b for a, b in zip(lo, hi)), budget
+
+    # Quantisation rounds down to three significant figures and never up.
+    assert quantize(0) == 0 and quantize(7) == 7 and quantize(999) == 999
+    assert quantize(1500) == 1500, quantize(1500)
+    assert quantize(149878) == 149000, quantize(149878)
+    assert quantize(3960000) == 3960000, quantize(3960000)
+    assert quantize(4294967295) == 4290000000, quantize(4294967295)
 
     cfg = {"sourcesPerTier": 10, "perDestTier": 10, "seed": DEFAULT_SEED,
            "coreTransitShare": CORE_TRANSIT_SHARE}
@@ -476,9 +595,12 @@ def self_test():
     pairs = payload["routes"]["pairs"]
     assert pairs, payload["routes"]
     for by_dst in pairs.values():
-        for by_hops in by_dst.values():
-            for entries in by_hops.values():
-                assert entries == sorted(entries), entries
+        for entry in by_dst.values():
+            assert entry["first"] == sorted(entry["first"]), entry["first"]
+            assert sorted(entry["best"]) == [str(h) for h in
+                                             range(1, MAX_HOPS + 1)], entry
+            for hist_ in entry["best"].values():
+                assert hist_ == sorted(hist_), hist_
     print("build_data.py self-test: OK")
 
 
@@ -540,8 +662,8 @@ def main(argv=None):
         adjacency, tier, args.sources_per_tier, args.per_dest_tier,
         args.route_seed)
     for src in TIERS:
-        row = [sum(sum(route_hist[(src, dst, h)].values())
-                   for h in range(1, MAX_HOPS + 1)) for dst in TIERS]
+        row = [sum(route_hist.get((src, dst), {}).get("first", Counter()).values())
+               for dst in TIERS]
         print(f"  {src:<11} -> " + "  ".join(f"{dst} {n:,}"
                                              for dst, n in zip(TIERS, row)))
     print(f"  direct {route_stats['direct']:,}, "

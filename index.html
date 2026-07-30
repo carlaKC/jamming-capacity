@@ -120,21 +120,25 @@
             the roles overlap heavily in channel count.
           </li>
           <li>
-            Sample routes between every ordered pair of roles, so each cell of
-            the matrix gets its own quota rather than core-to-core vanishing
+            Sample node pairs between every ordered pair of roles, so each cell
+            of the matrix gets its own quota rather than core-to-core vanishing
             into a rounding error.
           </li>
           <li>
-            Drop each route's first channel: the sender is not forwarding, so
-            no general bucket applies to it.
+            Route each pair two ways: the way a fee-optimising sender picks
+            (shortest, then cheapest) and the widest path the graph offers.
+            Route choice normally ignores channel size, so one attempt walks
+            into small channels that a retry would route around.
           </li>
           <li>
-            Reduce the rest to the route's bottleneck &mdash; the smallest
-            <code>max_htlc</code> among them.
+            Drop each route's first channel &mdash; the sender is not
+            forwarding, so no general bucket applies to it &mdash; and reduce
+            the rest to its bottleneck, the smallest <code>max_htlc</code>
+            among them.
           </li>
           <li>
-            Take the portion of routes whose bottleneck accommodates the
-            payment in its general bucket.
+            Take the portion of pairs whose bottleneck accommodates the payment
+            in its general bucket.
           </li>
         </ul>
         <p>
@@ -146,14 +150,19 @@
           to read off the grid.
         </p>
         <p>
+          The two figures bracket the answer. <strong>Best available</strong> is
+          what the topology permits; <strong>first attempt</strong> is what one
+          fee-optimising try gets, and the gap between them is what retrying is
+          worth. Nothing can aim at the upper figure deliberately &mdash; the
+          general-bucket limit is not gossiped, so repeated failure is the only
+          signal a sender ever gets &mdash; but it is the honest measure of what
+          the network can carry.
+        </p>
+        <p>
           A hop here is a node that forwards, so <code>A&rarr;B&rarr;C</code> is
-          one hop and a direct payment is none. Because each hop count is a
-          different set of node pairs, the heatmap rows are not nested &mdash;
-          short routes are not the best case. A one-hop route exists precisely
-          because both ends hang off the same large hub, and a hub with hundreds
-          of channels holds small ones to each of its leaves, so its single
-          gated channel is a bad one. The interior hub-to-hub channels are
-          generous; it is the last mile that binds.
+          one hop and a direct payment is none. The heatmap sweeps how far a
+          sender is willing to route: each row is the same set of pairs under a
+          longer budget, so the rows are nested and more hops never hurts.
         </p>
               </div>
       <div id="rout-matrix"></div>
@@ -163,19 +172,18 @@
       <div id="rout-legend"></div>
       <div class="chart-card" id="rout-chart"></div>
       <p class="table-caption">
-        The same measurement over each hop count's own sample of routes, from
-        one to six. Darker means more of the flow stays in general; the outlined
-        column is the selected payment size, and dragging across the squares
-        moves it.
+        What each extra hop of route length buys, over the same pairs. Darker
+        means more of the flow stays in general; the outlined column is the
+        selected payment size, and dragging across the squares moves it.
       </p>
       <div id="rout-heat-legend"></div>
       <div class="chart-card" id="rout-heat"></div>
       <h3 class="method-head">What this does not account for</h3>
       <ul class="caveats">
         <li>
-          <strong>One route per pair.</strong> We take the shortest route,
-	  cheapest among equals, and never retry &mdash; a real sender has
-	  several routes to try, so this is a lower bound.
+          <strong>Route length is capped at six hops.</strong> The best-available
+	  figure only considers paths that short, and a sender unwilling to go
+	  that far sits lower still &mdash; the heatmap shows where.
 	</li>
         <li>
           <strong>Unknown max_htlc_value_in_flight.</strong>  This value is not

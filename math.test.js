@@ -106,45 +106,42 @@ eq(M.perHopRoutability(cdf, 100, NaN, "count"), 0, "NaN frac -> nothing routes")
 // --- routeRoutability / makeRouteCdfs
 // Route bottlenecks, not per-channel values: 2 routes bottleneck at 100 sat,
 // 5 at 200, 3 at 400. At frac 0.5 a 100-sat payment needs a 200-sat bottleneck.
-const routeCdfs = M.makeRouteCdfs({
-  "1": [[100, 2], [200, 5], [400, 3]],
-  "3": [[100, 6], [200, 3], [400, 1]],
+// One cell: the same 10 pairs, seen two ways. At frac 0.5 a 100-sat payment
+// needs a 200-sat bottleneck.
+const cell = M.makeCellCdfs({
+  first: [[100, 6], [200, 3], [400, 1]],
+  best: { "1": [[0, 4], [200, 6]], "6": [[100, 2], [200, 5], [400, 3]] },
 });
-approx(M.routeRoutability(routeCdfs["1"], 100, 0.5), 0.8, 1e-12,
-  "one hop: 8 of 10 sampled routes clear");
-approx(M.routeRoutability(routeCdfs["3"], 100, 0.5), 0.4, 1e-12,
-  "three hops: 4 of 10 clear");
-// Longer routes are a different population of pairs, not a power of the
-// shorter one -- the whole point of measuring rather than composing.
-ok(M.routeRoutability(routeCdfs["3"], 100, 0.5) !==
-  Math.pow(M.routeRoutability(routeCdfs["1"], 100, 0.5), 3),
-  "route share is measured, not perHop^hops");
-eq(M.routeRoutability(routeCdfs["1"], 100, 0), 0, "zero frac -> nothing routes");
-eq(M.routeRoutability(routeCdfs["1"], 100, NaN), 0, "NaN frac -> nothing routes");
-eq(M.routeRoutability(undefined, 100, 0.5), 0, "no sample for that hop -> 0");
-eq(M.routeRoutability(routeCdfs["1"], 1, 0.5), 1, "tiny payment clears every route");
-eq(M.routeRoutability(routeCdfs["1"], 1e9, 0.5), 0, "huge payment clears none");
-eq(M.makeRouteCdfs({}).all.total, 0, "no hop buckets -> empty merge");
+approx(M.routeRoutability(cell.first, 100, 0.5), 0.4, 1e-12,
+  "first attempt: 4 of 10 pairs clear");
+approx(M.routeRoutability(cell.best["6"], 100, 0.5), 0.8, 1e-12,
+  "best available: 8 of 10 clear");
+// Retrying can only help, so best must dominate first over the same pairs.
+ok(M.routeRoutability(cell.best["6"], 100, 0.5) >=
+  M.routeRoutability(cell.first, 100, 0.5), "best available >= first attempt");
+// A pair out of reach within the budget is stored as a zero bottleneck.
+approx(M.routeRoutability(cell.best["1"], 100, 0.5), 0.6, 1e-12,
+  "unreachable within one hop clears nothing");
+eq(cell.first.total, cell.best["6"].total, "both series cover the same pairs");
+eq(M.routeRoutability(cell.first, 100, 0), 0, "zero frac -> nothing routes");
+eq(M.routeRoutability(cell.first, 100, NaN), 0, "NaN frac -> nothing routes");
+eq(M.routeRoutability(undefined, 100, 0.5), 0, "no sample -> 0");
+eq(M.routeRoutability(cell.first, 1, 0.5), 1, "tiny payment clears every route");
+eq(M.routeRoutability(cell.first, 1e9, 0.5), 0, "huge payment clears none");
+eq(M.makeCellCdfs({}).first.total, 0, "empty cell -> empty cdf");
+eq(Object.keys(M.makeCellCdfs({}).best).length, 0, "empty cell -> no budgets");
 
-// --- mergeHists / makeMatrixCdfs
-eq(M.mergeHists([[[100, 2], [200, 1]], [[100, 3], [400, 5]]]),
-  [[100, 5], [200, 1], [400, 5]], "equal values sum, order ascending");
-eq(M.mergeHists([]), [], "nothing to merge");
-eq(M.mergeHists([[], [[10, 1]]]), [[10, 1]], "empty lists drop out");
-// "all" is the union of the hop buckets, so its total is their sum.
-eq(routeCdfs.all.total, 20, "all merges both hop counts");
-approx(M.routeRoutability(routeCdfs.all, 100, 0.5), 0.6, 1e-12,
-  "12 of 20 routes clear across both hop counts");
-
+// --- makeMatrixCdfs
 const matrix = M.makeMatrixCdfs({
-  terminal: { terminal: { "1": [[100, 1], [400, 3]] } },
-  core: { core: { "2": [[400, 4]] } },
+  terminal: { terminal: { first: [[100, 1], [400, 3]], best: { "6": [[400, 4]] } } },
+  core: { core: { first: [[400, 4]], best: { "6": [[400, 4]] } } },
 });
-eq(matrix.terminal.terminal["1"].total, 4, "cell keeps its hop buckets");
-eq(matrix.terminal.terminal.all.total, 4, "cell gets an all-hops merge");
-approx(M.routeRoutability(matrix.terminal.terminal.all, 100, 0.5), 0.75, 1e-12,
-  "terminal to terminal: 3 of 4 clear");
-eq(M.routeRoutability(matrix.core.core.all, 100, 0.5), 1, "core to core: all clear");
+eq(matrix.terminal.terminal.first.total, 4, "cell keeps its first-attempt series");
+approx(M.routeRoutability(matrix.terminal.terminal.first, 100, 0.5), 0.75, 1e-12,
+  "terminal to terminal: 3 of 4 clear on the first try");
+eq(M.routeRoutability(matrix.terminal.terminal.best["6"], 100, 0.5), 1,
+  "all four clear given the best route");
+eq(M.routeRoutability(matrix.core.core.first, 100, 0.5), 1, "core to core: all clear");
 eq(matrix.terminal.core, undefined, "cells absent from the sample stay absent");
 
 // --- percentileSat: nearest rank over the same histogram.

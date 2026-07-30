@@ -64,8 +64,9 @@ exits non-zero on the command line.
   payment size by typing it or by dragging across either the chart or the
   heatmap; the shaded band marks the $10–$200 range where everyday payments sit.
 
-At the defaults, a $50 payment at $75k/BTC clears 4.6% of routes between two
-terminal nodes, rising to 13.9% when a peripheral node pays a core one.
+At the defaults, a $50 payment at $75k/BTC is routable in general for 9.9% of
+terminal→terminal pairs — but only 4.6% get there on the first attempt. Paying a
+core node instead takes that band to 30.7% / 12.6%.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction
@@ -99,9 +100,19 @@ such nodes are still sampled as route endpoints.
   would never fill in. Every cell gets 8,000–10,000 routes, so cells are
   comparable with each other — but there is no meaningful overall figure to
   read off the matrix.
-- Each pair is routed by shortest hop count, cheapest among equals. Scoring on
-  fee alone chases zero-fee channels through five- and six-hop paths, which is
-  not what a sender picks.
+- Each pair is routed **two ways**, giving a band rather than a point:
+  - **first attempt** — shortest hop count, cheapest among equals. Scoring on
+    fee alone chases zero-fee channels through five- and six-hop paths, which
+    is not what a sender picks. Route choice ignores channel size, exactly as a
+    real sender's does, so one attempt walks into small channels.
+  - **best available** — the widest path within a six-hop budget, computed by a
+    max-min dynamic program over hop count. This is where a sender retrying
+    converges, and it is what the topology permits.
+
+  The gap is large: core→core at $1 is 62.8% on the first attempt against 90.0%
+  best available. Nothing can aim at the upper figure deliberately, because the
+  general-bucket limit is not gossiped — repeated failure is the only signal a
+  sender gets — but it is the honest measure of what the network can carry.
 - A **hop** is a node that forwards. `A→B→C` is one hop; a direct payment is
   none.
 - The route's first channel is dropped — the sender is not forwarding, so no
@@ -118,27 +129,24 @@ the page stays live against a frozen route sample.
 
 ### Who pays whom
 
-At $50, rows the sender's role and columns the receiver's:
+At $50, rows the sender's role and columns the receiver's, as
+`best available / first attempt`:
 
 ```
-              terminal  peripheral        core
-terminal          4.6%        9.8%       12.6%
-peripheral        5.4%       11.7%       13.9%
-core              5.3%       11.5%       13.7%
+                terminal    peripheral          core
+terminal        9.9/4.6%     26.4/9.8%    30.7/12.6%
+peripheral      9.7/5.4%    24.8/11.7%    28.8/13.9%
+core           10.6/5.3%    27.6/11.5%    32.3/13.7%
 ```
 
-**The receiver dominates.** Along a row (changing who is paid) clearance nearly
-triples; down a column (changing who pays) it barely moves. That falls out of
-the sender's own first channel never being gated: your role only shapes the
-route, while theirs sets the last gated channel.
+**The receiver dominates.** Along a row (changing who is paid) routability
+roughly triples; down a column (changing who pays) it barely moves. That falls
+out of the sender's own first channel never being gated: your role only shapes
+the route, while theirs sets the last gated channel.
 
-Hop counts are different populations of node pairs, so the heatmap rows are not
-nested and short routes are not the best case. A one-hop route exists precisely
-because both endpoints hang off the same large hub, and a hub with hundreds of
-channels holds small ones to each of its leaves — so its single gated channel is
-a bad one. The interior hub-to-hub channels are generous; it is the last mile
-that binds, which is why the one-hop and three-hop curves cross rather than
-nesting.
+Both series cover the same sampled pairs, so they are directly comparable, and
+the heatmap sweeps the hop budget over those same pairs — each row is a longer
+route allowance, so the rows nest and more hops never hurts.
 
 ## Screenshots
 
@@ -196,7 +204,7 @@ python3 build_data.py mainnet.json --output data.js
 This also classifies nodes by role and re-samples the routes behind the
 routability section (`--transit-sources`, `--sources-per-tier`,
 `--per-dest-tier`, `--core-transit-share`, `--route-seed`), which takes about
-35 seconds. `--core-transit-share 0.5` gives a much tighter core — the 61 nodes
+50 seconds. `--core-transit-share 0.5` gives a much tighter core — the 61 nodes
 carrying half of all transit — if you want the roles further apart.
 
 ## Tests

@@ -26,9 +26,11 @@
   // chroma floor so they still do identity work. Validated light-mode:
   // CVD dE 10.4 protan, normal-vision 20.7, both >= 3:1 on the surface.
   const SERIES = {
-    hop: "#477129",    // slot 1 — per-hop
-    route: "#C38144",  // slot 2 — per-route
+    best: "#477129",   // slot 1 — the best route available
+    first: "#C38144",  // slot 2 — the route a sender actually picks
   };
+  // The gap between them is what retrying buys; an annotation, not a series.
+  const WEDGE = "rgba(120, 120, 108, 0.13)";
   // Single-hue sequential ramp for the heatmap, light -> dark = less -> more
   // stays in general. Light end clears 2:1 on the surface.
   const RAMP = ["#B1B8AB", "#9BA494", "#85907D", "#6F7B66", "#58674F"];
@@ -41,8 +43,10 @@
   const DECADES = [0.1, 1, 10, 100, 1000, 10000];
   // Where everyday Lightning payments actually sit. Shaded, not labelled.
   const TYPICAL = [10, 200];
-  const ROUTE_HOPS = 3;
+  // Hop budgets for the "best available" series: how far a sender is willing
+  // to route. The headline figure uses the full budget.
   const ALL_HOPS = [1, 2, 3, 4, 5, 6];
+  const BEST_BUDGET = 6;
   // Presets for the matrix's corner dropdown, matching the distribution
   // table's thresholds. Dragging still lands on arbitrary amounts, which the
   // dropdown picks up as an extra option.
@@ -141,11 +145,13 @@
     return (MATRIX[src || state.src] || {})[dst || state.dst] || {};
   }
 
-  // Share of sampled `hops`-hop routes whose bottleneck clears this payment.
-  // hops "all" merges every route length in the cell.
-  function routeAt(usd, hops, src, dst) {
-    const sat = M.usdToSat(usd, activePrice());
-    return M.routeRoutability(cell(src, dst)[hops], sat, routableFrac());
+  // Share of the cell's sampled pairs that clear this payment.
+  //   routeAt(usd, "first")       the route a sender actually picks
+  //   routeAt(usd, "best", n)     the widest path within n gated hops
+  function routeAt(usd, kind, budget, src, dst) {
+    const c = cell(src, dst);
+    const cdf = kind === "best" ? (c.best || {})[budget || BEST_BUDGET] : c.first;
+    return M.routeRoutability(cdf, M.usdToSat(usd, activePrice()), routableFrac());
   }
 
   // ---------------- verdict ----------------
@@ -174,7 +180,7 @@
     const pts = [];
     for (let i = 0; i <= CURVE_POINTS; i++) {
       const usd = USD_MIN * Math.pow(10, (i / CURVE_POINTS) * 5);
-      pts.push({ usd, hop: routeAt(usd, 1), route: routeAt(usd, ROUTE_HOPS) });
+      pts.push({ usd, best: routeAt(usd, "best"), first: routeAt(usd, "first") });
     }
     return pts;
   }
@@ -225,39 +231,43 @@
       class: "chart-axis-title",
     }, "payment size (log scale)"));
 
+    // The wedge: pairs a retry reaches that the first attempt does not. Best
+    // dominates first by construction, so this can never invert.
+    const wedge = pathFrom(pts, "best") + " " +
+      [...pts].reverse().map((p) =>
+        "L" + xOf(p.usd).toFixed(2) + " " + yOf(p.first).toFixed(2)).join(" ") + " Z";
+    node.appendChild(svg("path", { d: wedge, fill: WEDGE }));
+
     node.appendChild(svg("path", {
-      d: pathFrom(pts, "hop"), fill: "none", stroke: SERIES.hop,
+      d: pathFrom(pts, "best"), fill: "none", stroke: SERIES.best,
       "stroke-width": 2, "stroke-linejoin": "round",
     }));
     node.appendChild(svg("path", {
-      d: pathFrom(pts, "route"), fill: "none", stroke: SERIES.route,
+      d: pathFrom(pts, "first"), fill: "none", stroke: SERIES.first,
       "stroke-width": 2, "stroke-linejoin": "round",
     }));
 
-    // Selective direct labels, placed where the curves are furthest apart.
-    // Labelling the right-hand ends would stack them: both converge on zero
-    // there. The curves cross -- a one-hop route's only gated channel is a
-    // hub's channel to a leaf -- so the label goes above whichever is higher
-    // at that point rather than assuming an order.
+    // Selective direct labels, placed where the wedge is widest. Labelling the
+    // right-hand ends would stack them: both curves converge on zero there.
     let widest = pts[0];
-    const gap = (p) => Math.abs(p.hop - p.route);
-    for (const p of pts) if (gap(p) > gap(widest)) widest = p;
+    for (const p of pts) {
+      if (p.best - p.first > widest.best - widest.first) widest = p;
+    }
     const lx = xOf(widest.usd);
-    const hopOnTop = widest.hop >= widest.route;
     node.appendChild(svg("text", {
-      x: lx, y: yOf(widest.hop) + (hopOnTop ? -9 : 18), "text-anchor": "middle",
-      class: "chart-label", fill: SERIES.hop,
-    }, "one hop"));
+      x: lx, y: yOf(widest.best) - 9, "text-anchor": "middle",
+      class: "chart-label", fill: SERIES.best,
+    }, "best available"));
     node.appendChild(svg("text", {
-      x: lx, y: yOf(widest.route) + (hopOnTop ? 18 : -9), "text-anchor": "middle",
-      class: "chart-label", fill: SERIES.route,
-    }, ROUTE_HOPS + "-hop route"));
+      x: lx, y: yOf(widest.first) + 18, "text-anchor": "middle",
+      class: "chart-label", fill: SERIES.first,
+    }, "first attempt"));
 
     // Cursor. Draggable: the line is the payment-size control, mirrored by the
     // input field above the chart.
     const cx = xOf(state.payUsd);
-    const hop = routeAt(state.payUsd, 1);
-    const route = routeAt(state.payUsd, ROUTE_HOPS);
+    const best = routeAt(state.payUsd, "best");
+    const first = routeAt(state.payUsd, "first");
     refs.cursorLine = svg("line", {
       x1: cx, y1: PAD.top, x2: cx, y2: PAD.top + PH,
       stroke: AXIS_INK, "stroke-width": 1,
@@ -265,11 +275,11 @@
     node.appendChild(refs.cursorLine);
     // 2px surface ring rather than a border, so overlapping dots separate.
     refs.hopDot = svg("circle", {
-      cx, cy: yOf(hop), r: 5, fill: SERIES.hop,
+      cx, cy: yOf(best), r: 5, fill: SERIES.best,
       stroke: "#FEFEFA", "stroke-width": 2,
     });
     refs.routeDot = svg("circle", {
-      cx, cy: yOf(route), r: 5, fill: SERIES.route,
+      cx, cy: yOf(first), r: 5, fill: SERIES.first,
       stroke: "#FEFEFA", "stroke-width": 2,
     });
     node.append(refs.hopDot, refs.routeDot);
@@ -329,15 +339,15 @@
   function setPayment(usd) {
     state.payUsd = clampUsd(usd);
     const cx = xOf(state.payUsd);
-    const hop = routeAt(state.payUsd, 1);
-    const route = routeAt(state.payUsd, ROUTE_HOPS);
+    const best = routeAt(state.payUsd, "best");
+    const first = routeAt(state.payUsd, "first");
     if (refs.cursorLine) {
       refs.cursorLine.setAttribute("x1", cx);
       refs.cursorLine.setAttribute("x2", cx);
       refs.hopDot.setAttribute("cx", cx);
-      refs.hopDot.setAttribute("cy", yOf(hop));
+      refs.hopDot.setAttribute("cy", yOf(best));
       refs.routeDot.setAttribute("cx", cx);
-      refs.routeDot.setAttribute("cy", yOf(route));
+      refs.routeDot.setAttribute("cy", yOf(first));
     }
     if (refs.heatBox) {
       refs.heatBox.setAttribute("x",
@@ -379,7 +389,7 @@
     for (let i = 0; i < HEAT_COLS; i++) {
       const usd = USD_MIN * Math.pow(10, heatFrac(i) * 5);
       const byHop = {};
-      for (const h of HEAT_HOPS) byHop[h] = routeAt(usd, h);
+      for (const h of HEAT_HOPS) byHop[h] = routeAt(usd, "best", h);
       cols.push({ usd, byHop });
     }
     return cols;
@@ -405,7 +415,7 @@
       node.appendChild(svg("text", {
         x: HPAD.left - 10, y: y + HROW / 2 + 4, "text-anchor": "end",
         class: "chart-tick",
-      }, h + (h === 1 ? " hop" : " hops")));
+      }, "\u2264 " + h + (h === 1 ? " hop" : " hops")));
       cols.forEach((c, i) => {
         const share = c.byHop[h];
         // 2px surface gap between cells instead of a border.
@@ -496,8 +506,9 @@
   function showChartTip(p, e) {
     tooltipEl.replaceChildren(
       el("div", "tt-value", fmtUsd(p.usd) + " payment"),
-      el("div", "tt-line", "one hop: " + fmtPct1(p.hop)),
-      el("div", "tt-line", ROUTE_HOPS + "-hop route: " + fmtPct1(p.route)),
+      el("div", "tt-line", "best available: " + fmtPct1(p.best)),
+      el("div", "tt-line", "first attempt: " + fmtPct1(p.first)),
+      el("div", "tt-line", "gained by retrying: " + fmtPct1(p.best - p.first)),
     );
     tooltipEl.classList.remove("hidden");
     place(e);
@@ -506,7 +517,7 @@
   function showHeatTip(usd, hops, share, e) {
     tooltipEl.replaceChildren(
       el("div", "tt-value", fmtPct1(share) + " of routes clear"),
-      el("div", "tt-line", fmtUsd(usd) + " over " + hops +
+      el("div", "tt-line", fmtUsd(usd) + " within " + hops +
         (hops === 1 ? " hop" : " hops")),
       el("div", "tt-line", "at " + fmtUsd(activePrice()) + " / BTC"),
     );
@@ -606,7 +617,8 @@
     let peak = 0;
     for (const src of TIERS) {
       for (const dst of TIERS) {
-        peak = Math.max(peak, routeAt(state.payUsd, "all", src.key, dst.key));
+        peak = Math.max(peak,
+          routeAt(state.payUsd, "best", BEST_BUDGET, src.key, dst.key));
       }
     }
 
@@ -617,27 +629,34 @@
       rowHead.title = src.blurb;
       tr.appendChild(rowHead);
       for (const dst of TIERS) {
-        const share = routeAt(state.payUsd, "all", src.key, dst.key);
+        const share = routeAt(state.payUsd, "best", BEST_BUDGET, src.key, dst.key);
+        const tried = routeAt(state.payUsd, "first", null, src.key, dst.key);
         const td = el("td", "matrix-cell");
-        const btn = el("button", "matrix-btn", fmtPct1(share));
+        const btn = el("button", "matrix-btn");
+        // Big figure is what the topology permits; the small one is what a
+        // single attempt gets. The gap is what retrying is worth.
+        btn.appendChild(el("span", "matrix-best", fmtPct1(share)));
+        btn.appendChild(el("span", "matrix-first", fmtPct1(tried) + " first try"));
         btn.type = "button";
         btn.setAttribute("aria-pressed",
           String(src.key === state.src && dst.key === state.dst));
         btn.setAttribute("aria-label",
-          `${src.label} paying ${dst.label}: ${fmtPct1(share)} of routes clear`);
+          `${src.label} paying ${dst.label}: ${fmtPct1(share)} routable in ` +
+          `general, ${fmtPct1(tried)} on the first attempt`);
         const alpha = peak > 0 ? (share / peak) * 0.92 : 0;
         btn.style.background = "rgba(var(--cell-rgb), " + alpha.toFixed(3) + ")";
         if (alpha > 0.7) btn.classList.add("cell-dark");
         if (src.key === state.src && dst.key === state.dst) {
           td.classList.add("matrix-selected");
         }
-        const total = (cell(src.key, dst.key).all || {}).total || 0;
+        const total = (cell(src.key, dst.key).first || {}).total || 0;
         btn.addEventListener("click", () => {
           state.src = src.key;
           state.dst = dst.key;
           render();
         });
-        btn.addEventListener("pointermove", (e) => showMatrixTip(src, dst, share, total, e));
+        btn.addEventListener("pointermove",
+          (e) => showMatrixTip(src, dst, share, tried, total, e));
         btn.addEventListener("pointerleave", hideTip);
         td.appendChild(btn);
         tr.appendChild(td);
@@ -649,11 +668,12 @@
     return wrap;
   }
 
-  function showMatrixTip(src, dst, share, total, e) {
+  function showMatrixTip(src, dst, share, tried, total, e) {
     tooltipEl.replaceChildren(
-      el("div", "tt-value", fmtPct1(share) + " of routes clear"),
+      el("div", "tt-value", fmtPct1(share) + " routable in general"),
       el("div", "tt-line", src.label + " pays " + dst.label),
-      el("div", "tt-line", fmtInt(total) + " sampled routes"),
+      el("div", "tt-line", "first attempt: " + fmtPct1(tried)),
+      el("div", "tt-line", fmtInt(total) + " sampled pairs"),
       el("div", "tt-line", "receiver: " + dst.blurb),
     );
     tooltipEl.classList.remove("hidden");
@@ -670,15 +690,15 @@
       "Rows are who pays, columns who is paid, shaded against the strongest " +
       "cell. Everything below is for a " + tierLabel(state.src).toLowerCase() +
       " node paying a " + tierLabel(state.dst).toLowerCase() + " node — " +
-      fmtInt((cell().all || {}).total || 0) + " sampled routes.";
+      fmtInt((cell().first || {}).total || 0) + " sampled pairs.";
   }
 
   // ---------------- tiles ----------------
 
   function renderTiles() {
-    const hop = routeAt(state.payUsd, 1);
-    const route = routeAt(state.payUsd, ROUTE_HOPS);
-    const v = verdictFor(route);
+    const best = routeAt(state.payUsd, "best");
+    const first = routeAt(state.payUsd, "first");
+    const v = verdictFor(best);
     const row = el("div", "tile-row");
 
     const tile = (label, value, hue) => {
@@ -690,9 +710,8 @@
       return t;
     };
 
-    row.appendChild(tile("Clears one hop", fmtPct1(hop), SERIES.hop));
-    row.appendChild(tile("Clears a " + ROUTE_HOPS + "-hop route",
-      fmtPct1(route), SERIES.route));
+    row.appendChild(tile("Best available route", fmtPct1(best), SERIES.best));
+    row.appendChild(tile("First attempt", fmtPct1(first), SERIES.first));
 
     const verdict = el("div", "tile tile-verdict verdict-" + v.key);
     verdict.appendChild(el("div", "tile-label", "Verdict at " + fmtUsd(state.payUsd)));
@@ -702,7 +721,7 @@
     verdict.appendChild(line);
     // The complement of the route figure, stated rather than characterised.
     verdict.appendChild(el("div", "tile-note",
-      fmtPct1(1 - route) + " of " + ROUTE_HOPS + "-hop routes need reputation"));
+      fmtPct1(1 - best) + " cannot be routed in general at all"));
     row.appendChild(verdict);
 
     return row;
@@ -729,8 +748,8 @@
   function renderLegend() {
     const wrap = el("div", "chart-legend");
     for (const [hue, text] of [
-      [SERIES.hop, "clears one hop"],
-      [SERIES.route, "clears a " + ROUTE_HOPS + "-hop route"],
+      [SERIES.best, "best available route"],
+      [SERIES.first, "first attempt"],
     ]) {
       const item = el("span", "legend-item");
       const sw = el("span", "legend-swatch");
@@ -738,6 +757,10 @@
       item.append(sw, el("span", null, text));
       wrap.appendChild(item);
     }
+    const wedge = el("span", "legend-item");
+    const ws = el("span", "legend-swatch legend-wedge");
+    wedge.append(ws, el("span", null, "gained by retrying"));
+    wrap.appendChild(wedge);
     return wrap;
   }
 
@@ -749,7 +772,7 @@
     // length, so a thin dataset cannot leave empty rows.
     const sampled = (h) => TIERS.some((s) => TIERS.some((d) => {
       const c = (MATRIX[s.key] || {})[d.key];
-      return c && c[h] && c[h].total > 0;
+      return c && c.best && c.best[h] && c.best[h].total > 0;
     }));
     HEAT_HOPS = ALL_HOPS.filter(sampled);
     mounted = true;
