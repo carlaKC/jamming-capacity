@@ -32,7 +32,6 @@
   // Single-hue sequential ramp for the heatmap, light -> dark = less -> more
   // stays in general. Light end clears 2:1 on the surface.
   const RAMP = ["#B1B8AB", "#9BA494", "#85907D", "#6F7B66", "#58674F"];
-  const WEDGE = "rgba(120, 120, 108, 0.13)";   // annotation, not a third series
   const GRID = "#DED8CF";
   const AXIS_INK = "#78786C";
 
@@ -203,12 +202,6 @@
       class: "chart-axis-title",
     }, "payment size (log scale)"));
 
-    // The wedge: payments a hop admits but a whole route does not.
-    const wedge = pathFrom(pts, "hop") + " " +
-      [...pts].reverse().map((p) =>
-        "L" + xOf(p.usd).toFixed(2) + " " + yOf(p.route).toFixed(2)).join(" ") + " Z";
-    node.appendChild(svg("path", { d: wedge, fill: WEDGE }));
-
     node.appendChild(svg("path", {
       d: pathFrom(pts, "hop"), fill: "none", stroke: SERIES.hop,
       "stroke-width": 2, "stroke-linejoin": "round",
@@ -218,18 +211,22 @@
       "stroke-width": 2, "stroke-linejoin": "round",
     }));
 
-    // Selective direct labels, placed where the wedge is widest. Labelling the
-    // right-hand ends would stack them on top of each other: both curves
-    // converge on zero there.
+    // Selective direct labels, placed where the curves are furthest apart.
+    // Labelling the right-hand ends would stack them: both converge on zero
+    // there. The curves cross -- a one-hop route's only gated channel is a
+    // hub's channel to a leaf -- so the label goes above whichever is higher
+    // at that point rather than assuming an order.
     let widest = pts[0];
-    for (const p of pts) if (p.hop - p.route > widest.hop - widest.route) widest = p;
+    const gap = (p) => Math.abs(p.hop - p.route);
+    for (const p of pts) if (gap(p) > gap(widest)) widest = p;
     const lx = xOf(widest.usd);
+    const hopOnTop = widest.hop >= widest.route;
     node.appendChild(svg("text", {
-      x: lx, y: yOf(widest.hop) - 9, "text-anchor": "middle",
+      x: lx, y: yOf(widest.hop) + (hopOnTop ? -9 : 18), "text-anchor": "middle",
       class: "chart-label", fill: SERIES.hop,
     }, "one hop"));
     node.appendChild(svg("text", {
-      x: lx, y: yOf(widest.route) + 18, "text-anchor": "middle",
+      x: lx, y: yOf(widest.route) + (hopOnTop ? 18 : -9), "text-anchor": "middle",
       class: "chart-label", fill: SERIES.route,
     }, ROUTE_HOPS + "-hop route"));
 
@@ -474,8 +471,6 @@
       el("div", "tt-value", fmtUsd(p.usd) + " payment"),
       el("div", "tt-line", "one hop: " + fmtPct1(p.hop)),
       el("div", "tt-line", ROUTE_HOPS + "-hop route: " + fmtPct1(p.route)),
-      el("div", "tt-line",
-        "lost to the longer route: " + fmtPct1(p.hop - p.route)),
     );
     tooltipEl.classList.remove("hidden");
     place(e);
@@ -608,10 +603,6 @@
       item.append(sw, el("span", null, text));
       wrap.appendChild(item);
     }
-    const wedge = el("span", "legend-item");
-    const ws = el("span", "legend-swatch legend-wedge");
-    wedge.append(ws, el("span", null, "lost to the longer route"));
-    wrap.appendChild(wedge);
     return wrap;
   }
 

@@ -520,7 +520,6 @@ body.dragging-cursor { cursor: ew-resize; user-select: none; }
 }
 .legend-item { display: inline-flex; align-items: center; gap: 7px; }
 .legend-swatch { width: 14px; height: 3px; border-radius: 999px; flex: none; }
-.legend-wedge { height: 11px; background: rgba(120, 120, 108, 0.13); border-radius: 3px; }
 
 .ramp-legend {
   display: flex;

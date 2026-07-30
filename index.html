@@ -112,7 +112,11 @@
 	  lengths. It uses the following methodology:
          </p>
         <ul class="method-bullets">
-          <li>Sample real routes between random pairs of nodes in the graph.</li>
+          <li>
+            Sample real routes between random pairs of edge nodes &mdash; those
+            with five channels or fewer, where payments actually start and end.
+            Hubs still carry the traffic, they are just not addressed.
+          </li>
           <li>
             Drop each route's first channel: the sender is not forwarding, so
             no general bucket applies to it.
@@ -129,9 +133,12 @@
         <p>
           A hop here is a node that forwards, so <code>A&rarr;B&rarr;C</code> is
           one hop and a direct payment is none. Because each hop count is a
-          different set of node pairs, the rows are not nested: one-hop routes
-          are not simply the best case, since their only gated channel is the
-          delivery into the destination, and destinations are usually small.
+          different set of node pairs, the rows are not nested &mdash; short
+          routes are not the best case. A one-hop route exists precisely because
+          both ends hang off the same large hub, and a hub with hundreds of
+          channels holds small ones to each of its leaves, so its single gated
+          channel is a bad one. The interior hub-to-hub channels are generous;
+          it is the last mile that binds.
         </p>
               </div>
       <p class="table-caption" id="rout-caption"></p>

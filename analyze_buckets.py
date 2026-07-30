@@ -14,8 +14,8 @@ two tables it prints match what the page renders.
   3. The channel percentile table: the inverse question — what the edge at a
      given max_htlc percentile can actually forward, in dollars, through one
      general slot, a peer's whole general allocation, or a congestion slot.
-  4. General-bucket routability: the share of payment flow that clears the
-     general bucket with no reputation, per hop and composed over a route.
+  4. General-bucket routability: the share of routes sampled from the real
+     graph that clear the general bucket with no reputation, by hop count.
 
 Base value `B` per direction is the advertised `max_htlc_msat` (the observable
 lower bound on `max_htlc_value_in_flight_msat`), kept only when the advertising
@@ -33,8 +33,9 @@ import os
 import sys
 from collections import Counter, namedtuple
 
-from build_data import (parse_graph, sample_routes, DEFAULT_SOURCES,
-                        DEFAULT_PER_SOURCE, DEFAULT_SEED)
+from build_data import (parse_graph, sample_routes, endpoint_nodes,
+                        DEFAULT_SOURCES, DEFAULT_PER_SOURCE, DEFAULT_SEED,
+                        DEFAULT_MAX_DEGREE)
 
 # --------------------------------------------------------------------------
 # Units.
@@ -481,7 +482,7 @@ def print_routability_table(route_cdfs, cfg, metrics, col=9):
 # --------------------------------------------------------------------------
 
 def analyze(graph, cfg, source, csv_path=None):
-    kept, adjacency, stats = parse_graph(graph)
+    kept, adjacency, degrees, stats = parse_graph(graph)
     if not kept:
         print("no usable directed policies found", file=sys.stderr)
         return 1
@@ -489,8 +490,8 @@ def analyze(graph, cfg, source, csv_path=None):
     hist = sorted(Counter(kept).items())
     cdf = make_cdf(hist)
     route_hist, route_stats = sample_routes(
-        adjacency, cfg["route_sources"], cfg["route_per_source"],
-        cfg["route_seed"])
+        adjacency, degrees, cfg["route_sources"], cfg["route_per_source"],
+        cfg["route_seed"], max_degree=cfg["endpoint_max_degree"])
     route_cdfs = make_route_cdfs(route_hist)
 
     metrics = [type_metrics(n, cfg)
@@ -502,8 +503,12 @@ def analyze(graph, cfg, source, csv_path=None):
     print(f"Data: {os.path.basename(source)} — {len(kept):,} directed edges kept, "
           f"{stats['dropped']:,} dropped (single-channel node), "
           f"{stats['imputed']:,} with max_htlc imputed from capacity.")
+    cap = cfg["endpoint_max_degree"]
+    limit = (f"endpoints capped at {cap} channels" if cap > 0
+             else "no endpoint degree cap")
     print(f"Routes: {route_stats['sampled']:,} sampled from "
-          f"{cfg['route_sources']:,} sources (seed {cfg['route_seed']}).")
+          f"{cfg['route_sources']:,} sources of {route_stats['endpoints']:,} "
+          f"eligible ({limit}, seed {cfg['route_seed']}).")
     print(f"Bucket liquidity split: general {cfg['general_pct']}%, "
           f"congestion {cfg['congestion_pct']}%, "
           f"protected {100 - cfg['general_pct'] - cfg['congestion_pct']}% "
@@ -731,6 +736,11 @@ def main(argv=None):
     parser.add_argument("--route-seed", type=int, default=DEFAULT_SEED,
                         metavar="N",
                         help="route sampling seed (default: %(default)s)")
+    parser.add_argument("--endpoint-max-degree", type=int,
+                        default=DEFAULT_MAX_DEGREE, metavar="N",
+                        help="only nodes with N channels or fewer may send or "
+                             "receive; 0 for no restriction "
+                             "(default: %(default)s)")
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -782,6 +792,7 @@ def main(argv=None):
         "route_sources": args.route_sources,
         "route_per_source": args.route_per_source,
         "route_seed": args.route_seed,
+        "endpoint_max_degree": args.endpoint_max_degree,
     }
 
     with open(args.graph) as fh:

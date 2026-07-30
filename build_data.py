@@ -12,6 +12,11 @@ Two datasets come out of one pass over the graph.
    section. For each sampled route we record its *bottleneck*: the smallest
    max_htlc among the channels that a general bucket actually applies to.
 
+   Endpoints are capped by channel count (--endpoint-max-degree), because
+   payments start and finish at wallets on the edge of the network rather than
+   at the routing hubs in the middle. Hubs remain in the graph and carry the
+   traffic; they simply stop being addressed.
+
    Under PR #1280 the sender does not apply the bucket to its own outgoing
    channel -- the restriction is applied by a forwarding node on its outbound
    channel. So a route's constrained channels are all but the first, and we
@@ -62,6 +67,12 @@ DEFAULT_SOURCES = 1200
 DEFAULT_PER_SOURCE = 60
 DEFAULT_SEED = 7
 
+# Cap on an endpoint's channel count. Mainnet's median node has one channel and
+# three quarters have three or fewer, so five keeps ordinary wallets -- including
+# ones with a couple of backup channels -- while excluding anything that does
+# real forwarding.
+DEFAULT_MAX_DEGREE = 5
+
 
 def _int(value):
     try:
@@ -96,10 +107,13 @@ def median_fees(edges):
 
 
 def parse_graph(graph):
-    """Return (hist_values, adjacency, stats).
+    """Return (hist_values, adjacency, degrees, stats).
 
     hist_values are the kept per-direction max_htlc sats. adjacency maps a node
     to [(peer, max_htlc_sat, fee_msat)] over directions it can forward on.
+    degrees is each node's channel count, which selects route endpoints -- note
+    it counts channels, not usable directions, so a node whose channels are
+    disabled still reads as well-connected.
     """
     edges = graph.get("edges", [])
     counts = channel_counts(edges)
@@ -148,7 +162,7 @@ def parse_graph(graph):
         "imputed": imputed,
         "single": sum(1 for c in counts.values() if c == 1),
     }
-    return kept, adjacency, stats
+    return kept, adjacency, counts, stats
 
 
 def route_bottleneck(path, htlc):
@@ -202,24 +216,45 @@ def reconstruct(prev, dest):
     return path[::-1]
 
 
-def sample_routes(adjacency, sources, per_source, seed):
+def endpoint_nodes(adjacency, degrees, max_degree):
+    """Nodes eligible to send or receive.
+
+    Payments originate and terminate at the edge of the network, not at the
+    routing hubs in the middle, so endpoints are capped by channel count. Hubs
+    stay in the graph and still carry the traffic -- they just stop standing in
+    for wallets. A cap of zero or less means no restriction.
+    """
+    nodes = sorted(adjacency)
+    if max_degree is None or max_degree <= 0:
+        return nodes
+    return [n for n in nodes if degrees.get(n, 0) <= max_degree]
+
+
+def sample_routes(adjacency, degrees, sources, per_source, seed,
+                  max_degree=None):
     """Sample routes and bin their bottlenecks by forwarding-node count."""
     htlc = {}
     for node, out in adjacency.items():
         for peer, sat, _ in out:
             htlc[(node, peer)] = sat
-    nodes = sorted(adjacency)
-    if not nodes:
-        return {}, {"sampled": 0, "direct": 0, "tooLong": 0, "unreachable": 0}
+    empty = {"sampled": 0, "direct": 0, "tooLong": 0, "unreachable": 0,
+             "endpoints": 0}
+    eligible = endpoint_nodes(adjacency, degrees, max_degree)
+    if not eligible:
+        return {}, empty
+    allowed = set(eligible)
 
     rng = random.Random(seed)
-    picks = nodes if len(nodes) <= sources else rng.sample(nodes, sources)
+    picks = (eligible if len(eligible) <= sources
+             else rng.sample(eligible, sources))
     hist = defaultdict(Counter)
-    stats = {"sampled": 0, "direct": 0, "tooLong": 0, "unreachable": 0}
+    stats = dict(empty, endpoints=len(eligible))
 
     for source in picks:
         prev = shortest_paths(adjacency, source)
-        reachable = [n for n in prev if n != source]
+        # Hubs are reachable and are routed *through*; they are just not
+        # somewhere a payment is addressed to.
+        reachable = [n for n in prev if n != source and n in allowed]
         if not reachable:
             continue
         if len(reachable) > per_source:
@@ -242,7 +277,7 @@ def sample_routes(adjacency, sources, per_source, seed):
 
 
 def render_data_js(kept, route_hist, route_stats, stats, source,
-                   sources, per_source, seed):
+                   sources, per_source, seed, max_degree):
     hist = sorted(Counter(kept).items())
     payload = {
         "source": os.path.basename(source),
@@ -257,6 +292,7 @@ def render_data_js(kept, route_hist, route_stats, stats, source,
             "perSource": per_source,
             "seed": seed,
             "nominalSat": NOMINAL_SAT,
+            "endpointMaxDegree": max_degree,
             "stats": route_stats,
             # keyed by number of forwarding nodes on the route
             "hops": {str(h): [[s, c] for s, c in sorted(route_hist[h].items())]
@@ -290,7 +326,7 @@ FIXTURE = {
 
 
 def self_test():
-    kept, adjacency, stats = parse_graph(FIXTURE)
+    kept, adjacency, degrees, stats = parse_graph(FIXTURE)
     # Imputed: C->A (no policy) and A->D (zero max_htlc). E->A has no capacity
     # to fall back on, and A->E floors to zero sat.
     assert stats["imputed"] == 2, stats
@@ -311,13 +347,35 @@ def self_test():
     # B -> A -> D -> C is two hops, binding on min(A->D 3960000, D->C 800).
     assert route_bottleneck(["B", "A", "D", "C"], htlc) == 800
 
-    route_hist, route_stats = sample_routes(adjacency, 10, 10, DEFAULT_SEED)
+    # Endpoint eligibility. A has four channels and is the only hub; E never
+    # made it into the graph. A cap of zero or None means everyone.
+    assert degrees["A"] == 4 and degrees["B"] == 1, dict(degrees)
+    assert endpoint_nodes(adjacency, degrees, 3) == ["B", "C", "D"]
+    assert endpoint_nodes(adjacency, degrees, 4) == ["A", "B", "C", "D"]
+    assert endpoint_nodes(adjacency, degrees, 0) == ["A", "B", "C", "D"]
+    assert endpoint_nodes(adjacency, degrees, None) == ["A", "B", "C", "D"]
+    # With only one eligible endpoint there is no pair to route between.
+    assert endpoint_nodes(adjacency, degrees, 1) == ["B"]
+    lone_hist, lone_stats = sample_routes(adjacency, degrees, 10, 10,
+                                          DEFAULT_SEED, max_degree=1)
+    assert lone_hist == {} and lone_stats["sampled"] == 0, lone_stats
+
+    route_hist, route_stats = sample_routes(adjacency, degrees, 10, 10,
+                                            DEFAULT_SEED)
     assert route_stats["sampled"] > 0, route_stats
     assert route_stats["direct"] > 0, route_stats  # A's neighbours are 0 hops
+    assert route_stats["endpoints"] == 4, route_stats
     assert all(1 <= h <= MAX_HOPS for h in route_hist), sorted(route_hist)
 
+    # Capping endpoints at 3 channels bars A, so every sampled route must be
+    # between B, C and D -- and each therefore forwards through A.
+    capped_hist, capped_stats = sample_routes(adjacency, degrees, 10, 10,
+                                              DEFAULT_SEED, max_degree=3)
+    assert capped_stats["endpoints"] == 3, capped_stats
+    assert capped_stats["sampled"] > 0, capped_stats
+
     js = render_data_js(kept, route_hist, route_stats, stats, "path/to/f.json",
-                        10, 10, DEFAULT_SEED)
+                        10, 10, DEFAULT_SEED, DEFAULT_MAX_DEGREE)
     assert js.startswith("window.EDGE_DATA = {") and js.endswith(";\n"), js[:40]
     payload = json.loads(js[len("window.EDGE_DATA = "):-2])
     assert payload["hist"] == [[800, 1], [900, 1], [1500, 2], [3000, 1],
@@ -342,6 +400,11 @@ def main(argv=None):
                         help="destinations per source (default: %(default)s)")
     parser.add_argument("--route-seed", type=int, default=DEFAULT_SEED,
                         help="route sampling seed (default: %(default)s)")
+    parser.add_argument("--endpoint-max-degree", type=int,
+                        default=DEFAULT_MAX_DEGREE, metavar="N",
+                        help="only nodes with N channels or fewer may send or "
+                             "receive; 0 for no restriction "
+                             "(default: %(default)s)")
     parser.add_argument("--self-test", action="store_true",
                         help="run the built-in fixture test and exit")
     args = parser.parse_args(argv)
@@ -352,7 +415,7 @@ def main(argv=None):
 
     with open(args.graph) as fh:
         graph = json.load(fh)
-    kept, adjacency, stats = parse_graph(graph)
+    kept, adjacency, degrees, stats = parse_graph(graph)
     if not kept:
         print("no usable directed policies found", file=sys.stderr)
         return 1
@@ -360,9 +423,18 @@ def main(argv=None):
           f"dropped {stats['dropped']:,}, imputed {stats['imputed']:,}, "
           f"single-channel nodes {stats['single']:,}")
 
-    print(f"sampling routes from {args.sources:,} sources ...")
+    cap = args.endpoint_max_degree
+    eligible = len(endpoint_nodes(adjacency, degrees, cap))
+    if not eligible:
+        print(f"no node has {cap} channels or fewer", file=sys.stderr)
+        return 1
+    print(f"sampling routes from {args.sources:,} of {eligible:,} endpoints "
+          f"(<= {cap} channels)..." if cap > 0 else
+          f"sampling routes from {args.sources:,} of {eligible:,} endpoints "
+          f"(no degree cap)...")
     route_hist, route_stats = sample_routes(
-        adjacency, args.sources, args.per_source, args.route_seed)
+        adjacency, degrees, args.sources, args.per_source, args.route_seed,
+        max_degree=cap)
     print("  " + ", ".join(f"{h} hop: {sum(route_hist[h].values()):,}"
                            for h in sorted(route_hist)))
     print(f"  direct {route_stats['direct']:,}, "
@@ -371,7 +443,7 @@ def main(argv=None):
     with open(args.output, "w") as fh:
         fh.write(render_data_js(kept, route_hist, route_stats, stats,
                                 args.graph, args.sources, args.per_source,
-                                args.route_seed))
+                                args.route_seed, cap))
     print(f"wrote {os.path.getsize(args.output):,} bytes to {args.output}")
     return 0
 

@@ -63,8 +63,8 @@ exits non-zero on the command line.
   dragging across either the chart or the heatmap; the shaded band marks the
   $10–$200 range where everyday payments sit.
 
-At the defaults, a $50 payment at $75k/BTC clears a one-hop route 26.1% of the
-time and a three-hop route 4.6%.
+At the defaults, a $50 payment at $75k/BTC clears a one-hop route 5.5% of the
+time and a three-hop route 4.3%.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction
@@ -79,10 +79,11 @@ such nodes are still sampled as route endpoints.
 
 `build_data.py` walks the real graph, and the page reads the result:
 
-- Endpoints are drawn uniformly from every node with a channel. Most of the
-  network is single-channel, so this reproduces the spoke → hub → … → hub →
-  spoke shape without asserting it: a degree-1 node can never be an
-  intermediate hop.
+- Endpoints are drawn uniformly from **edge nodes** — those with five channels
+  or fewer (`--endpoint-max-degree`), which is 13,309 of the graph's nodes.
+  Payments start and finish at wallets, not at the routing hubs in the middle;
+  hubs stay in the graph and carry the traffic, they are just never addressed.
+  This reproduces the spoke → hub → … → hub → spoke shape without asserting it.
 - Each pair is routed by shortest hop count, cheapest among equals. Scoring on
   fee alone chases zero-fee channels through five- and six-hop paths, which is
   not what a sender picks.
@@ -100,9 +101,20 @@ Because the general allocation is the same fraction `f` of every channel's
 bottleneck therefore depends only on the topology, so every bucket parameter on
 the page stays live against a frozen route sample.
 
-Hop counts are different populations of node pairs, so the rows are not nested —
-one-hop routes are not simply the best case, since their only gated channel is
-the delivery into the destination, and destinations are usually small.
+Hop counts are different populations of node pairs, so the rows are not nested,
+and short routes are not the best case. A one-hop route exists precisely because
+both endpoints hang off the *same* hub — median degree 812 — and a hub with
+hundreds of channels holds small ones to each of its leaves:
+
+| | delivery-hop median | clears $50 | destination degree | last forwarder degree |
+|---|---|---|---|---|
+| 1 hop | 59,400 sat | 5.5% | 1 | 812 |
+| 2 hops | 675,000 sat | 18.5% | 2 | 663 |
+| 3 hops | 297,000 sat | 11.8% | 1 | 558 |
+
+The interior hub-to-hub channels are generous (5.9M sat median at two hops); it
+is the last mile into the destination that binds. This is why the one-hop and
+three-hop curves cross rather than nesting.
 
 ## Screenshots
 
@@ -120,8 +132,8 @@ The channel percentile table — what each bucket lets the edge at a given
 
 ![Channel percentile table](percentile_table.png)
 
-The routability visualizer — the gap between one-hop and three-hop routes is the
-flow forced onto reputation:
+The routability visualizer — the share of sampled routes still clearing the
+general bucket without reputation:
 
 ![General-bucket routability](routability.png)
 
@@ -141,7 +153,7 @@ All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--prices`, `--thresholds`, `--percentiles`,
 `--percentile-price`, `--percentile-type`, `--payments`, `--route-sources`,
-`--route-per-source`, `--route-seed`);
+`--route-per-source`, `--route-seed`, `--endpoint-max-degree`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above. It re-samples routes from
 the graph rather than reading `data.js`, so with the default seed it reproduces
@@ -157,7 +169,9 @@ python3 build_data.py mainnet.json --output data.js
 ```
 
 This also re-samples the routes behind the routability section
-(`--sources`, `--per-source`, `--route-seed`), which takes about 25 seconds.
+(`--sources`, `--per-source`, `--route-seed`, `--endpoint-max-degree`), which
+takes about 25 seconds. Pass `--endpoint-max-degree 0` to lift the endpoint
+restriction and let hubs send and receive as well.
 
 ## Tests
 

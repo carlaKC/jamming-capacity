@@ -662,14 +662,18 @@
 
   // ---------------- boot ----------------
 
-  const routeStats = (DATA.routes || {}).stats || {};
+  const routes = DATA.routes || {};
+  const routeStats = routes.stats || {};
+  const cap = routes.endpointMaxDegree;
   $("provenance").textContent =
     "Data: " + DATA.source + " (" + DATA.generated + ") — " +
     fmtInt(DATA.directionsKept) + " directed edges kept, " +
     fmtInt(DATA.directionsDropped) + " dropped (single-channel node), " +
     fmtInt(DATA.directionsImputed) +
     " with max_htlc imputed from capacity; " +
-    fmtInt(routeStats.sampled || 0) + " routes sampled.";
+    fmtInt(routeStats.sampled || 0) + " routes sampled between " +
+    fmtInt(routeStats.endpoints || 0) + " endpoints" +
+    (cap > 0 ? " of " + cap + " channels or fewer" : "") + ".";
 
   R.mount({ M, ROUTE: ROUTE_CDFS, tooltip: $("tooltip") });
   syncSlotModeUi();
