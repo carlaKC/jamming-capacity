@@ -124,7 +124,28 @@ eq(M.routeRoutability(routeCdfs["1"], 100, NaN), 0, "NaN frac -> nothing routes"
 eq(M.routeRoutability(undefined, 100, 0.5), 0, "no sample for that hop -> 0");
 eq(M.routeRoutability(routeCdfs["1"], 1, 0.5), 1, "tiny payment clears every route");
 eq(M.routeRoutability(routeCdfs["1"], 1e9, 0.5), 0, "huge payment clears none");
-eq(Object.keys(M.makeRouteCdfs({})).length, 0, "no hop buckets -> no cdfs");
+eq(M.makeRouteCdfs({}).all.total, 0, "no hop buckets -> empty merge");
+
+// --- mergeHists / makeMatrixCdfs
+eq(M.mergeHists([[[100, 2], [200, 1]], [[100, 3], [400, 5]]]),
+  [[100, 5], [200, 1], [400, 5]], "equal values sum, order ascending");
+eq(M.mergeHists([]), [], "nothing to merge");
+eq(M.mergeHists([[], [[10, 1]]]), [[10, 1]], "empty lists drop out");
+// "all" is the union of the hop buckets, so its total is their sum.
+eq(routeCdfs.all.total, 20, "all merges both hop counts");
+approx(M.routeRoutability(routeCdfs.all, 100, 0.5), 0.6, 1e-12,
+  "12 of 20 routes clear across both hop counts");
+
+const matrix = M.makeMatrixCdfs({
+  terminal: { terminal: { "1": [[100, 1], [400, 3]] } },
+  core: { core: { "2": [[400, 4]] } },
+});
+eq(matrix.terminal.terminal["1"].total, 4, "cell keeps its hop buckets");
+eq(matrix.terminal.terminal.all.total, 4, "cell gets an all-hops merge");
+approx(M.routeRoutability(matrix.terminal.terminal.all, 100, 0.5), 0.75, 1e-12,
+  "terminal to terminal: 3 of 4 clear");
+eq(M.routeRoutability(matrix.core.core.all, 100, 0.5), 1, "core to core: all clear");
+eq(matrix.terminal.core, undefined, "cells absent from the sample stay absent");
 
 // --- percentileSat: nearest rank over the same histogram.
 // [[100,3],[200,5],[300,2]] -> 100 100 100 200 200 200 200 200 300 300

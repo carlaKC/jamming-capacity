@@ -12,10 +12,9 @@ Two datasets come out of one pass over the graph.
    section. For each sampled route we record its *bottleneck*: the smallest
    max_htlc among the channels that a general bucket actually applies to.
 
-   Endpoints are capped by channel count (--endpoint-max-degree), because
-   payments start and finish at wallets on the edge of the network rather than
-   at the routing hubs in the middle. Hubs remain in the graph and carry the
-   traffic; they simply stop being addressed.
+   Endpoints are classified by the role they play in routing, and routes are
+   sampled between every ordered pair of roles, so the page can show who is
+   paying whom rather than one blended number. See classify_nodes().
 
    Under PR #1280 the sender does not apply the bucket to its own outgoing
    channel -- the restriction is applied by a forwarding node on its outbound
@@ -63,15 +62,20 @@ NOMINAL_SAT = 100_000
 # page's heatmap stops at six.
 MAX_HOPS = 6
 
-DEFAULT_SOURCES = 1200
-DEFAULT_PER_SOURCE = 60
 DEFAULT_SEED = 7
 
-# Cap on an endpoint's channel count. Mainnet's median node has one channel and
-# three quarters have three or fewer, so five keeps ordinary wallets -- including
-# ones with a couple of backup channels -- while excluding anything that does
-# real forwarding.
-DEFAULT_MAX_DEGREE = 5
+# Pass 1 estimates betweenness from this many shortest-path trees; pass 2 draws
+# this many sources from each role and this many destinations per source per
+# destination role.
+DEFAULT_TRANSIT_SOURCES = 400
+DEFAULT_SOURCES_PER_TIER = 400
+DEFAULT_PER_DEST_TIER = 25
+
+# The smallest set of nodes carrying this share of all transit is the core.
+CORE_TRANSIT_SHARE = 0.90
+
+# Ordered so the page can lay the matrix out directly.
+TIERS = ("terminal", "peripheral", "core")
 
 
 def _int(value):
@@ -216,68 +220,163 @@ def reconstruct(prev, dest):
     return path[::-1]
 
 
-def endpoint_nodes(adjacency, degrees, max_degree):
-    """Nodes eligible to send or receive.
+def tree_depths(prev, source):
+    """Depth of every node in a predecessor tree, memoised up the parent chain."""
+    depth = {source: 0}
+    for node in prev:
+        if node in depth:
+            continue
+        chain = []
+        cur = node
+        while cur not in depth:
+            chain.append(cur)
+            cur = prev[cur]
+        d = depth[cur]
+        for c in reversed(chain):
+            d += 1
+            depth[c] = d
+    return depth
 
-    Payments originate and terminate at the edge of the network, not at the
-    routing hubs in the middle, so endpoints are capped by channel count. Hubs
-    stay in the graph and still carry the traffic -- they just stop standing in
-    for wallets. A cap of zero or less means no restriction.
+
+def transit_counts(adjacency, sources, seed):
+    """How many sampled shortest paths pass *through* each node.
+
+    A node is an intermediate on the path to d exactly when it is a proper
+    ancestor of d in the source's shortest-path tree, so the count for one
+    source is its subtree size less itself -- no need to walk every path.
     """
     nodes = sorted(adjacency)
-    if max_degree is None or max_degree <= 0:
-        return nodes
-    return [n for n in nodes if degrees.get(n, 0) <= max_degree]
+    rng = random.Random(seed)
+    picks = nodes if len(nodes) <= sources else rng.sample(nodes, sources)
+    through = Counter()
+    for source in picks:
+        prev = shortest_paths(adjacency, source)
+        depth = tree_depths(prev, source)
+        size = dict.fromkeys(prev, 1)
+        for node in sorted(prev, key=lambda n: -depth[n]):
+            parent = prev[node]
+            if parent is not None:
+                size[parent] += size[node]
+        for node in prev:
+            if node != source:
+                through[node] += size[node] - 1
+    return through
 
 
-def sample_routes(adjacency, degrees, sources, per_source, seed,
-                  max_degree=None):
-    """Sample routes and bin their bottlenecks by forwarding-node count."""
+def node_universe(adjacency):
+    """Every node a route can touch.
+
+    A node with no usable outgoing direction never appears as an adjacency key,
+    but is still reachable and can still be paid -- it just cannot forward, so
+    it is terminal by construction.
+    """
+    nodes = set(adjacency)
+    for out in adjacency.values():
+        for peer, _, _ in out:
+            nodes.add(peer)
+    return sorted(nodes)
+
+
+def classify_nodes(adjacency, through, core_share=CORE_TRANSIT_SHARE):
+    """Label every node by the role it plays in routing.
+
+    terminal    never an intermediate on anybody's path -- it only sends and
+                receives. A structural fact, not a threshold.
+    core        the smallest set of nodes carrying `core_share` of all transit.
+                A Pareto cut rather than a hand-picked line.
+    peripheral  forwards, but is not part of that core.
+
+    Degree would be the obvious axis and is the wrong one: the tiers overlap
+    heavily in degree, so a degree threshold misclassifies a large minority.
+    Channel size separates nodes better but is what the page then measures, so
+    tiering on it would make the result circular.
+    """
+    nodes = node_universe(adjacency)
+    carriers = sorted((n for n in nodes if through[n] > 0),
+                      key=lambda n: (-through[n], n))
+    total = sum(through[n] for n in carriers)
+    tier = {n: "terminal" for n in nodes if through[n] == 0}
+    run = 0
+    for node in carriers:
+        # The node that tips the running total past the share is still core, so
+        # the set genuinely covers it.
+        tier[node] = "core" if run < total * core_share else "peripheral"
+        run += through[node]
+    return tier
+
+
+def sample_matrix(adjacency, tier, sources_per_tier, per_dest_tier, seed):
+    """Sample routes between every ordered pair of roles.
+
+    Stratified, not uniform: core-to-core is 0.2% x 0.2% of a uniform draw and
+    would never fill in. Each cell instead gets its own quota, which means cell
+    figures are comparable to each other but there is no meaningful "overall"
+    number to read off the matrix.
+    """
     htlc = {}
     for node, out in adjacency.items():
         for peer, sat, _ in out:
             htlc[(node, peer)] = sat
-    empty = {"sampled": 0, "direct": 0, "tooLong": 0, "unreachable": 0,
-             "endpoints": 0}
-    eligible = endpoint_nodes(adjacency, degrees, max_degree)
-    if not eligible:
-        return {}, empty
-    allowed = set(eligible)
+
+    # Sources must be able to originate, so they come from the adjacency; any
+    # classified node can be a destination.
+    by_tier = defaultdict(list)
+    for node in sorted(adjacency):
+        by_tier[tier[node]].append(node)
+    population = Counter(tier.values())
 
     rng = random.Random(seed)
-    picks = (eligible if len(eligible) <= sources
-             else rng.sample(eligible, sources))
+    # (src_tier, dst_tier, hops) -> {bottleneck: routes}
     hist = defaultdict(Counter)
-    stats = dict(empty, endpoints=len(eligible))
+    stats = {"sampled": 0, "direct": 0, "tooLong": 0,
+             "tiers": {t: population[t] for t in TIERS},
+             "senders": {t: len(by_tier[t]) for t in TIERS}}
 
-    for source in picks:
-        prev = shortest_paths(adjacency, source)
-        # Hubs are reachable and are routed *through*; they are just not
-        # somewhere a payment is addressed to.
-        reachable = [n for n in prev if n != source and n in allowed]
-        if not reachable:
+    for src_tier in TIERS:
+        pool = by_tier[src_tier]
+        if not pool:
             continue
-        if len(reachable) > per_source:
-            reachable = rng.sample(reachable, per_source)
-        for dest in reachable:
-            path = reconstruct(prev, dest)
-            if path is None:
-                stats["unreachable"] += 1
-                continue
-            hops = len(path) - 2          # forwarding nodes on the route
-            if hops < 1:
-                stats["direct"] += 1      # A->B: nothing is forwarded
-                continue
-            if hops > MAX_HOPS:
-                stats["tooLong"] += 1
-                continue
-            hist[hops][route_bottleneck(path, htlc)] += 1
-            stats["sampled"] += 1
+        picks = (pool if len(pool) <= sources_per_tier
+                 else rng.sample(pool, sources_per_tier))
+        for source in picks:
+            prev = shortest_paths(adjacency, source)
+            reach = defaultdict(list)
+            for node in prev:
+                if node != source:
+                    reach[tier[node]].append(node)
+            for dst_tier in TIERS:
+                cand = reach.get(dst_tier, [])
+                if not cand:
+                    continue
+                if len(cand) > per_dest_tier:
+                    cand = rng.sample(cand, per_dest_tier)
+                for dest in cand:
+                    path = reconstruct(prev, dest)
+                    if path is None:
+                        continue
+                    hops = len(path) - 2      # forwarding nodes on the route
+                    if hops < 1:
+                        stats["direct"] += 1  # A->B: nothing is forwarded
+                        continue
+                    if hops > MAX_HOPS:
+                        stats["tooLong"] += 1
+                        continue
+                    hist[(src_tier, dst_tier, hops)][
+                        route_bottleneck(path, htlc)] += 1
+                    stats["sampled"] += 1
     return hist, stats
 
 
-def render_data_js(kept, route_hist, route_stats, stats, source,
-                   sources, per_source, seed, max_degree):
+def matrix_payload(route_hist):
+    """Nest (src, dst, hops) counters as pairs[src][dst][hops] = [[sat, n], ...]."""
+    pairs = {}
+    for (src, dst, hops), counts in route_hist.items():
+        pairs.setdefault(src, {}).setdefault(dst, {})[str(hops)] = [
+            [s, c] for s, c in sorted(counts.items())]
+    return pairs
+
+
+def render_data_js(kept, route_hist, route_stats, stats, source, cfg):
     hist = sorted(Counter(kept).items())
     payload = {
         "source": os.path.basename(source),
@@ -287,17 +386,10 @@ def render_data_js(kept, route_hist, route_stats, stats, source,
         "directionsImputed": stats["imputed"],
         "singleChannelNodes": stats["single"],
         "hist": [[s, c] for s, c in hist],
-        "routes": {
-            "sources": sources,
-            "perSource": per_source,
-            "seed": seed,
-            "nominalSat": NOMINAL_SAT,
-            "endpointMaxDegree": max_degree,
-            "stats": route_stats,
-            # keyed by number of forwarding nodes on the route
-            "hops": {str(h): [[s, c] for s, c in sorted(route_hist[h].items())]
-                     for h in sorted(route_hist)},
-        },
+        "routes": dict(cfg, nominalSat=NOMINAL_SAT, tiers=list(TIERS),
+                       stats=route_stats,
+                       # pairs[sender role][receiver role][forwarding nodes]
+                       pairs=matrix_payload(route_hist)),
     }
     return "window.EDGE_DATA = %s;\n" % json.dumps(payload, separators=(",", ":"))
 
@@ -347,43 +439,46 @@ def self_test():
     # B -> A -> D -> C is two hops, binding on min(A->D 3960000, D->C 800).
     assert route_bottleneck(["B", "A", "D", "C"], htlc) == 800
 
-    # Endpoint eligibility. A has four channels and is the only hub; E never
-    # made it into the graph. A cap of zero or None means everyone.
-    assert degrees["A"] == 4 and degrees["B"] == 1, dict(degrees)
-    assert endpoint_nodes(adjacency, degrees, 3) == ["B", "C", "D"]
-    assert endpoint_nodes(adjacency, degrees, 4) == ["A", "B", "C", "D"]
-    assert endpoint_nodes(adjacency, degrees, 0) == ["A", "B", "C", "D"]
-    assert endpoint_nodes(adjacency, degrees, None) == ["A", "B", "C", "D"]
-    # With only one eligible endpoint there is no pair to route between.
-    assert endpoint_nodes(adjacency, degrees, 1) == ["B"]
-    lone_hist, lone_stats = sample_routes(adjacency, degrees, 10, 10,
-                                          DEFAULT_SEED, max_degree=1)
-    assert lone_hist == {} and lone_stats["sampled"] == 0, lone_stats
+    # Roles. Every route between B, C and D forwards through A, and nothing
+    # ever forwards through the leaves, so A is the whole core.
+    through = transit_counts(adjacency, 10, DEFAULT_SEED)
+    assert through["A"] > 0, dict(through)
+    assert through["B"] == 0, dict(through)
+    tier = classify_nodes(adjacency, through)
+    assert tier["A"] == "core", tier
+    assert tier["B"] == "terminal", tier
+    # C and D forward for each other over the C-D channel, so they carry some
+    # transit without being core.
+    assert set(tier.values()) <= {"terminal", "peripheral", "core"}, tier
 
-    route_hist, route_stats = sample_routes(adjacency, degrees, 10, 10,
+    # The node tipping the running total past the share stays inside the core.
+    only = classify_nodes(adjacency, Counter({"A": 10, "C": 1}))
+    assert only["A"] == "core" and only["C"] == "peripheral", only
+
+    route_hist, route_stats = sample_matrix(adjacency, tier, 10, 10,
                                             DEFAULT_SEED)
     assert route_stats["sampled"] > 0, route_stats
     assert route_stats["direct"] > 0, route_stats  # A's neighbours are 0 hops
-    assert route_stats["endpoints"] == 4, route_stats
-    assert all(1 <= h <= MAX_HOPS for h in route_hist), sorted(route_hist)
+    assert route_stats["tiers"]["core"] == 1, route_stats
+    assert all(1 <= h <= MAX_HOPS for _, _, h in route_hist), sorted(route_hist)
+    assert all(s in TIERS and d in TIERS for s, d, _ in route_hist), \
+        sorted(route_hist)
 
-    # Capping endpoints at 3 channels bars A, so every sampled route must be
-    # between B, C and D -- and each therefore forwards through A.
-    capped_hist, capped_stats = sample_routes(adjacency, degrees, 10, 10,
-                                              DEFAULT_SEED, max_degree=3)
-    assert capped_stats["endpoints"] == 3, capped_stats
-    assert capped_stats["sampled"] > 0, capped_stats
-
+    cfg = {"sourcesPerTier": 10, "perDestTier": 10, "seed": DEFAULT_SEED,
+           "coreTransitShare": CORE_TRANSIT_SHARE}
     js = render_data_js(kept, route_hist, route_stats, stats, "path/to/f.json",
-                        10, 10, DEFAULT_SEED, DEFAULT_MAX_DEGREE)
+                        cfg)
     assert js.startswith("window.EDGE_DATA = {") and js.endswith(";\n"), js[:40]
     payload = json.loads(js[len("window.EDGE_DATA = "):-2])
     assert payload["hist"] == [[800, 1], [900, 1], [1500, 2], [3000, 1],
                                [990000, 1], [3960000, 1]], payload["hist"]
     assert payload["source"] == "f.json"
-    assert payload["routes"]["hops"], payload["routes"]
-    for entries in payload["routes"]["hops"].values():
-        assert entries == sorted(entries), entries
+    pairs = payload["routes"]["pairs"]
+    assert pairs, payload["routes"]
+    for by_dst in pairs.values():
+        for by_hops in by_dst.values():
+            for entries in by_hops.values():
+                assert entries == sorted(entries), entries
     print("build_data.py self-test: OK")
 
 
@@ -394,17 +489,24 @@ def main(argv=None):
                         help="describegraph JSON (default: ./mainnet.json)")
     parser.add_argument("--output", default="data.js",
                         help="output JS file (default: ./data.js)")
-    parser.add_argument("--sources", type=int, default=DEFAULT_SOURCES,
-                        help="route-sample source nodes (default: %(default)s)")
-    parser.add_argument("--per-source", type=int, default=DEFAULT_PER_SOURCE,
-                        help="destinations per source (default: %(default)s)")
+    parser.add_argument("--transit-sources", type=int,
+                        default=DEFAULT_TRANSIT_SOURCES, metavar="N",
+                        help="trees used to estimate betweenness "
+                             "(default: %(default)s)")
+    parser.add_argument("--sources-per-tier", type=int,
+                        default=DEFAULT_SOURCES_PER_TIER, metavar="N",
+                        help="route-sample sources drawn from each role "
+                             "(default: %(default)s)")
+    parser.add_argument("--per-dest-tier", type=int,
+                        default=DEFAULT_PER_DEST_TIER, metavar="N",
+                        help="destinations per source, per role "
+                             "(default: %(default)s)")
+    parser.add_argument("--core-transit-share", type=float,
+                        default=CORE_TRANSIT_SHARE, metavar="F",
+                        help="core is the smallest set carrying this share of "
+                             "transit (default: %(default)s)")
     parser.add_argument("--route-seed", type=int, default=DEFAULT_SEED,
                         help="route sampling seed (default: %(default)s)")
-    parser.add_argument("--endpoint-max-degree", type=int,
-                        default=DEFAULT_MAX_DEGREE, metavar="N",
-                        help="only nodes with N channels or fewer may send or "
-                             "receive; 0 for no restriction "
-                             "(default: %(default)s)")
     parser.add_argument("--self-test", action="store_true",
                         help="run the built-in fixture test and exit")
     args = parser.parse_args(argv)
@@ -423,27 +525,36 @@ def main(argv=None):
           f"dropped {stats['dropped']:,}, imputed {stats['imputed']:,}, "
           f"single-channel nodes {stats['single']:,}")
 
-    cap = args.endpoint_max_degree
-    eligible = len(endpoint_nodes(adjacency, degrees, cap))
-    if not eligible:
-        print(f"no node has {cap} channels or fewer", file=sys.stderr)
-        return 1
-    print(f"sampling routes from {args.sources:,} of {eligible:,} endpoints "
-          f"(<= {cap} channels)..." if cap > 0 else
-          f"sampling routes from {args.sources:,} of {eligible:,} endpoints "
-          f"(no degree cap)...")
-    route_hist, route_stats = sample_routes(
-        adjacency, degrees, args.sources, args.per_source, args.route_seed,
-        max_degree=cap)
-    print("  " + ", ".join(f"{h} hop: {sum(route_hist[h].values()):,}"
-                           for h in sorted(route_hist)))
+    print(f"estimating betweenness over {args.transit_sources:,} trees ...")
+    through = transit_counts(adjacency, args.transit_sources, args.route_seed)
+    tier = classify_nodes(adjacency, through, args.core_transit_share)
+    counts = Counter(tier.values())
+    for name in TIERS:
+        sel = [n for n in tier if tier[n] == name]
+        deg = sorted(degrees[n] for n in sel) or [0]
+        print(f"  {name:<11} {counts[name]:>7,} nodes  "
+              f"degree p50 {deg[len(deg) // 2]:>5,}")
+
+    print(f"sampling routes from {args.sources_per_tier:,} sources per role ...")
+    route_hist, route_stats = sample_matrix(
+        adjacency, tier, args.sources_per_tier, args.per_dest_tier,
+        args.route_seed)
+    for src in TIERS:
+        row = [sum(sum(route_hist[(src, dst, h)].values())
+                   for h in range(1, MAX_HOPS + 1)) for dst in TIERS]
+        print(f"  {src:<11} -> " + "  ".join(f"{dst} {n:,}"
+                                             for dst, n in zip(TIERS, row)))
     print(f"  direct {route_stats['direct']:,}, "
           f"over {MAX_HOPS} hops {route_stats['tooLong']:,}")
 
+    cfg = {"sourcesPerTier": args.sources_per_tier,
+           "perDestTier": args.per_dest_tier,
+           "transitSources": args.transit_sources,
+           "coreTransitShare": args.core_transit_share,
+           "seed": args.route_seed}
     with open(args.output, "w") as fh:
         fh.write(render_data_js(kept, route_hist, route_stats, stats,
-                                args.graph, args.sources, args.per_source,
-                                args.route_seed, cap))
+                                args.graph, cfg))
     print(f"wrote {os.path.getsize(args.output):,} bytes to {args.output}")
     return 0
 

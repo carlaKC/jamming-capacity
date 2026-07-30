@@ -113,9 +113,16 @@
          </p>
         <ul class="method-bullets">
           <li>
-            Sample real routes between random pairs of edge nodes &mdash; those
-            with five channels or fewer, where payments actually start and end.
-            Hubs still carry the traffic, they are just not addressed.
+            Sort every node by the role it plays in routing: <strong>terminal</strong>
+            never forwards for anyone, <strong>core</strong> is the smallest set
+            carrying 90% of all transit, and <strong>peripheral</strong> is the
+            rest. Degree would be the obvious axis and is the wrong one &mdash;
+            the roles overlap heavily in channel count.
+          </li>
+          <li>
+            Sample routes between every ordered pair of roles, so each cell of
+            the matrix gets its own quota rather than core-to-core vanishing
+            into a rounding error.
           </li>
           <li>
             Drop each route's first channel: the sender is not forwarding, so
@@ -131,16 +138,25 @@
           </li>
         </ul>
         <p>
+          Pick a cell to see who is paying whom. The receiver's role matters far
+          more than the sender's, because the sender's own first channel is
+          never gated &mdash; your role only shapes the route, while theirs sets
+          the last gated channel. Cells are sampled separately and so are
+          comparable with each other, but there is no meaningful overall figure
+          to read off the grid.
+        </p>
+        <p>
           A hop here is a node that forwards, so <code>A&rarr;B&rarr;C</code> is
           one hop and a direct payment is none. Because each hop count is a
-          different set of node pairs, the rows are not nested &mdash; short
-          routes are not the best case. A one-hop route exists precisely because
-          both ends hang off the same large hub, and a hub with hundreds of
-          channels holds small ones to each of its leaves, so its single gated
-          channel is a bad one. The interior hub-to-hub channels are generous;
-          it is the last mile that binds.
+          different set of node pairs, the heatmap rows are not nested &mdash;
+          short routes are not the best case. A one-hop route exists precisely
+          because both ends hang off the same large hub, and a hub with hundreds
+          of channels holds small ones to each of its leaves, so its single
+          gated channel is a bad one. The interior hub-to-hub channels are
+          generous; it is the last mile that binds.
         </p>
               </div>
+      <div id="rout-matrix"></div>
       <p class="table-caption" id="rout-caption"></p>
       <div id="rout-controls-slot"></div>
       <div id="rout-tiles"></div>

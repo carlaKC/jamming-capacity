@@ -203,9 +203,36 @@
   }
 
   // hopsHist: { "1": [[sat, count], ...], ... } keyed by forwarding-node count.
+  // "all" merges every hop count, which is how a sender-to-receiver cell reads:
+  // the hop mix is part of what paying that kind of node is like, so it should
+  // not be conditioned away.
   function makeRouteCdfs(hopsHist) {
     const out = {};
-    for (const hops in hopsHist) out[hops] = makeCdf(hopsHist[hops]);
+    const lists = [];
+    for (const hops in hopsHist) {
+      out[hops] = makeCdf(hopsHist[hops]);
+      lists.push(hopsHist[hops]);
+    }
+    out.all = makeCdf(mergeHists(lists));
+    return out;
+  }
+
+  // Combine ascending [sat, count] histograms into one, summing equal values.
+  function mergeHists(lists) {
+    const acc = new Map();
+    for (const hist of lists) {
+      for (const [sat, count] of hist) acc.set(sat, (acc.get(sat) || 0) + count);
+    }
+    return [...acc.entries()].sort((a, b) => a[0] - b[0]);
+  }
+
+  // pairs[senderRole][receiverRole][hops] -> cdfs, plus an "all" hop merge.
+  function makeMatrixCdfs(pairs) {
+    const out = {};
+    for (const src in pairs) {
+      out[src] = {};
+      for (const dst in pairs[src]) out[src][dst] = makeRouteCdfs(pairs[src][dst]);
+    }
     return out;
   }
 
@@ -247,6 +274,8 @@
     perHopRoutability,
     routeRoutability,
     makeRouteCdfs,
+    mergeHists,
+    makeMatrixCdfs,
     percentileSat,
   };
 });

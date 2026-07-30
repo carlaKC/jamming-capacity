@@ -48,10 +48,23 @@
 
   const clampUsd = (u) => Math.min(USD_MAX, Math.max(USD_MIN, u));
 
+  // Routing roles, ordered as the matrix reads. Descriptions are the whole
+  // justification for the split, so they live next to it.
+  const TIERS = [
+    { key: "terminal", label: "Terminal",
+      blurb: "never forwards for anyone — wallets and merchants" },
+    { key: "peripheral", label: "Peripheral",
+      blurb: "forwards, but carries little of the traffic" },
+    { key: "core", label: "Core",
+      blurb: "the smallest set carrying 90% of all transit" },
+  ];
+
   const state = {
     payUsd: 50,
     price: 75000,
     type: 483,
+    src: "terminal",     // who is paying
+    dst: "terminal",     // who is being paid
   };
 
   // Hop counts the sample actually covers, so a thin dataset cannot leave
@@ -66,7 +79,7 @@
   };
 
   let M = null;
-  let ROUTE = null;       // { "1": cdf, ... } over sampled route bottlenecks
+  let MATRIX = null;      // MATRIX[sender][receiver] = { "1": cdf, ..., all }
   let params = null;      // { typeMetrics, channelTypes, prices }
   let mounted = false;
   let tooltipEl = null;
@@ -119,10 +132,16 @@
     return params.typeMetrics(activeType()).peerGeneralFrac;
   }
 
+  // The selected sender -> receiver cell.
+  function cell(src, dst) {
+    return (MATRIX[src || state.src] || {})[dst || state.dst] || {};
+  }
+
   // Share of sampled `hops`-hop routes whose bottleneck clears this payment.
-  function routeAt(usd, hops) {
+  // hops "all" merges every route length in the cell.
+  function routeAt(usd, hops, src, dst) {
     const sat = M.usdToSat(usd, activePrice());
-    return M.routeRoutability(ROUTE[hops], sat, routableFrac());
+    return M.routeRoutability(cell(src, dst)[hops], sat, routableFrac());
   }
 
   // ---------------- verdict ----------------
@@ -540,6 +559,91 @@
     return row;
   }
 
+  // ---------------- who pays whom ----------------
+
+  // Rows are the sender's role, columns the receiver's. Both matter, but not
+  // equally: the sender's own first channel is never gated, so its role only
+  // shapes the route, while the receiver's role sets the last gated channel.
+  // Shading matches the distribution table's ramp, including its contrast
+  // switch, so the two read the same way.
+  function renderMatrix() {
+    const wrap = el("div", "matrix-wrap");
+    const table = el("table", "persona-matrix");
+
+    const head = el("tr");
+    head.appendChild(el("th", "matrix-corner", "paying ↓ / paid →"));
+    for (const t of TIERS) {
+      const th = el("th", null, t.label);
+      th.title = t.blurb;
+      head.appendChild(th);
+    }
+    const thead = el("thead");
+    thead.appendChild(head);
+    table.appendChild(thead);
+
+    // Shares here sit in a narrow band, so a 0-100% ramp would render the whole
+    // grid near-white. Scale to the strongest cell instead: every cell prints
+    // its own figure, so the shading only has to carry the comparison.
+    let peak = 0;
+    for (const src of TIERS) {
+      for (const dst of TIERS) {
+        peak = Math.max(peak, routeAt(state.payUsd, "all", src.key, dst.key));
+      }
+    }
+
+    const body = el("tbody");
+    for (const src of TIERS) {
+      const tr = el("tr");
+      const rowHead = el("th", "row-head", src.label);
+      rowHead.title = src.blurb;
+      tr.appendChild(rowHead);
+      for (const dst of TIERS) {
+        const share = routeAt(state.payUsd, "all", src.key, dst.key);
+        const td = el("td", "matrix-cell");
+        const btn = el("button", "matrix-btn", fmtPct1(share));
+        btn.type = "button";
+        btn.setAttribute("aria-pressed",
+          String(src.key === state.src && dst.key === state.dst));
+        btn.setAttribute("aria-label",
+          `${src.label} paying ${dst.label}: ${fmtPct1(share)} of routes clear`);
+        const alpha = peak > 0 ? (share / peak) * 0.92 : 0;
+        btn.style.background = "rgba(var(--cell-rgb), " + alpha.toFixed(3) + ")";
+        if (alpha > 0.7) btn.classList.add("cell-dark");
+        if (src.key === state.src && dst.key === state.dst) {
+          td.classList.add("matrix-selected");
+        }
+        const total = (cell(src.key, dst.key).all || {}).total || 0;
+        btn.addEventListener("click", () => {
+          state.src = src.key;
+          state.dst = dst.key;
+          render();
+        });
+        btn.addEventListener("pointermove", (e) => showMatrixTip(src, dst, share, total, e));
+        btn.addEventListener("pointerleave", hideTip);
+        td.appendChild(btn);
+        tr.appendChild(td);
+      }
+      body.appendChild(tr);
+    }
+    table.appendChild(body);
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  function showMatrixTip(src, dst, share, total, e) {
+    tooltipEl.replaceChildren(
+      el("div", "tt-value", fmtPct1(share) + " of routes clear"),
+      el("div", "tt-line", src.label + " pays " + dst.label),
+      el("div", "tt-line", fmtInt(total) + " sampled routes"),
+      el("div", "tt-line", "receiver: " + dst.blurb),
+    );
+    tooltipEl.classList.remove("hidden");
+    place(e);
+  }
+
+  const tierLabel = (key) =>
+    (TIERS.find((t) => t.key === key) || { label: key }).label;
+
   // ---------------- tiles ----------------
 
   function renderTiles() {
@@ -581,12 +685,20 @@
     if (!mounted) return;
     const pts = curvePoints();
 
+    $("rout-matrix").replaceChildren(renderMatrix());
     $("rout-controls-slot").replaceChildren(renderControls());
     $("rout-tiles").replaceChildren(renderTiles());
     $("rout-chart").replaceChildren(renderChart(pts));
     $("rout-legend").replaceChildren(renderLegend());
     $("rout-heat").replaceChildren(renderHeatmap(heatColumns()));
     $("rout-heat-legend").replaceChildren(renderRampLegend());
+    // Everything below the matrix describes the selected cell, so say which.
+    $("rout-caption").textContent =
+      "Share of routes clearing the general bucket at " + fmtUsd(state.payUsd) +
+      ", shaded against the strongest cell. Everything below is for a " +
+      tierLabel(state.src).toLowerCase() + " node paying a " +
+      tierLabel(state.dst).toLowerCase() + " node — " +
+      fmtInt((cell().all || {}).total || 0) + " sampled routes.";
   }
 
   // A legend is always present for two series; the swatch carries identity and
@@ -608,9 +720,15 @@
 
   function mount(deps) {
     M = deps.M;
-    ROUTE = deps.ROUTE;
+    MATRIX = deps.MATRIX;
     tooltipEl = deps.tooltip;
-    HEAT_HOPS = ALL_HOPS.filter((h) => ROUTE[h] && ROUTE[h].total > 0);
+    // A hop count earns a heatmap row if any cell sampled a route of that
+    // length, so a thin dataset cannot leave empty rows.
+    const sampled = (h) => TIERS.some((s) => TIERS.some((d) => {
+      const c = (MATRIX[s.key] || {})[d.key];
+      return c && c[h] && c[h].total > 0;
+    }));
+    HEAT_HOPS = ALL_HOPS.filter(sampled);
     mounted = true;
   }
 

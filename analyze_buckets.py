@@ -33,9 +33,10 @@ import os
 import sys
 from collections import Counter, namedtuple
 
-from build_data import (parse_graph, sample_routes, endpoint_nodes,
-                        DEFAULT_SOURCES, DEFAULT_PER_SOURCE, DEFAULT_SEED,
-                        DEFAULT_MAX_DEGREE)
+from build_data import (parse_graph, transit_counts, classify_nodes,
+                        sample_matrix, TIERS, DEFAULT_SEED,
+                        DEFAULT_TRANSIT_SOURCES, DEFAULT_SOURCES_PER_TIER,
+                        DEFAULT_PER_DEST_TIER, CORE_TRANSIT_SHARE, MAX_HOPS)
 
 # --------------------------------------------------------------------------
 # Units.
@@ -235,9 +236,20 @@ def route_routability(route_cdf, sat, frac):
 
 
 def make_route_cdfs(route_hist):
-    """{hops: Counter({bottleneck_sat: routes})} -> {hops: Cdf}."""
-    return {h: make_cdf(sorted(counts.items()))
-            for h, counts in route_hist.items()}
+    """{(src, dst, hops): Counter({bottleneck: routes})} -> nested Cdfs.
+
+    Returns cdfs[src][dst][hops], plus cdfs[src][dst]["all"] merging every
+    route length -- the hop mix is part of what paying that kind of node is
+    like, so a cell should not be conditioned on it.
+    """
+    merged = {}
+    for (src, dst, hops), counts in route_hist.items():
+        cell = merged.setdefault(src, {}).setdefault(dst, {})
+        cell[hops] = counts
+        cell.setdefault("all", Counter()).update(counts)
+    return {src: {dst: {h: make_cdf(sorted(c.items())) for h, c in cell.items()}
+                  for dst, cell in by_dst.items()}
+            for src, by_dst in merged.items()}
 
 
 def percentile_sat(cdf, p):
@@ -445,23 +457,63 @@ def print_percentile_table(cdf, cfg, metrics, col=20, label_col=18):
 ROUTE_HOPS = [1, 2, 3, 4, 5, 6]
 
 
-def print_routability_table(route_cdfs, cfg, metrics, col=9):
+def _rout_header(cfg, metrics):
     n = cfg["percentile_type"]
     m = next(x for x in metrics if x["n"] == n)
-    price = cfg["percentile_price"]
-    frac = m["peer_general_frac"]
-    hops = [h for h in ROUTE_HOPS if h in route_cdfs]
+    return n, m, cfg["percentile_price"], m["peer_general_frac"]
+
+
+def print_routability_matrix(route_cdfs, cfg, metrics, col=12):
+    """Who pays whom: clearance for every ordered pair of routing roles."""
+    n, m, price, frac = _rout_header(cfg, metrics)
 
     print("-" * 78)
-    print(f"General-bucket routability — {n}-slot channels")
-    print("Share of sampled routes clearing the general bucket with no")
-    print(f"reputation (k = {m['k']} of {m['slots']['general']} general slots).")
+    print(f"General-bucket routability by role — {n}-slot channels")
+    print(f"Share of sampled routes clearing general with no reputation "
+          f"(k = {m['k']}).")
+    print("Rows are the sender's role, columns the receiver's. The sender's own")
+    print("first channel is never gated, so the receiver's role dominates.")
+    print("Cells are sampled separately: compare them, do not average them.")
+    print("-" * 78)
+
+    for usd in cfg["payments"]:
+        print(f"  ${_compact_usd(usd)}")
+        print("    " + f"{'':<12}" + "".join(f"{d:>{col}}" for d in TIERS))
+        for src in TIERS:
+            row = f"    {src:<12}"
+            for dst in TIERS:
+                cdf = route_cdfs.get(src, {}).get(dst, {}).get("all")
+                sat = usd_to_sat(usd, price)
+                row += (f"{route_routability(cdf, sat, frac) * 100:>{col - 1}.1f}%"
+                        if cdf else f"{'-':>{col}}")
+            print(row)
+        print()
+
+    print("    " + f"{'routes':<12}" + "".join(f"{d:>{col}}" for d in TIERS))
+    for src in TIERS:
+        row = f"    {src:<12}"
+        for dst in TIERS:
+            cdf = route_cdfs.get(src, {}).get(dst, {}).get("all")
+            row += f"{cdf.total if cdf else 0:>{col},.0f}"
+        print(row)
+    print()
+
+
+def print_routability_table(route_cdfs, cfg, metrics, col=9):
+    """Clearance by route length, for one sender/receiver pair."""
+    n, m, price, frac = _rout_header(cfg, metrics)
+    src, dst = cfg["route_pair"]
+    cell = route_cdfs.get(src, {}).get(dst, {})
+    hops = [h for h in ROUTE_HOPS if h in cell]
+
+    print("-" * 78)
+    print(f"General-bucket routability by route length — {src} pays {dst}")
     print("A hop is a forwarding node, so each column is its own sample of")
     print("node pairs and the columns are not nested.")
     print("-" * 78)
 
     if not hops:
-        print("  no sampled routes in this dataset\n")
+        print(f"  no sampled routes from {src} to {dst}\n")
         return
 
     print("  " + f"{'Payment':<12}" + "".join(
@@ -470,10 +522,10 @@ def print_routability_table(route_cdfs, cfg, metrics, col=9):
         sat = usd_to_sat(usd, price)
         row = f"  {'$' + _compact_usd(usd):<12}"
         for h in hops:
-            row += f"{route_routability(route_cdfs[h], sat, frac) * 100:>{col - 1}.1f}%"
+            row += f"{route_routability(cell[h], sat, frac) * 100:>{col - 1}.1f}%"
         print(row)
     print("  " + f"{'routes':<12}" + "".join(
-        f"{route_cdfs[h].total:>{col},.0f}" for h in hops))
+        f"{cell[h].total:>{col},.0f}" for h in hops))
     print()
 
 
@@ -489,9 +541,12 @@ def analyze(graph, cfg, source, csv_path=None):
 
     hist = sorted(Counter(kept).items())
     cdf = make_cdf(hist)
-    route_hist, route_stats = sample_routes(
-        adjacency, degrees, cfg["route_sources"], cfg["route_per_source"],
-        cfg["route_seed"], max_degree=cfg["endpoint_max_degree"])
+    through = transit_counts(adjacency, cfg["transit_sources"],
+                             cfg["route_seed"])
+    tier = classify_nodes(adjacency, through, cfg["core_transit_share"])
+    route_hist, route_stats = sample_matrix(
+        adjacency, tier, cfg["sources_per_tier"], cfg["per_dest_tier"],
+        cfg["route_seed"])
     route_cdfs = make_route_cdfs(route_hist)
 
     metrics = [type_metrics(n, cfg)
@@ -503,12 +558,10 @@ def analyze(graph, cfg, source, csv_path=None):
     print(f"Data: {os.path.basename(source)} — {len(kept):,} directed edges kept, "
           f"{stats['dropped']:,} dropped (single-channel node), "
           f"{stats['imputed']:,} with max_htlc imputed from capacity.")
-    cap = cfg["endpoint_max_degree"]
-    limit = (f"endpoints capped at {cap} channels" if cap > 0
-             else "no endpoint degree cap")
-    print(f"Routes: {route_stats['sampled']:,} sampled from "
-          f"{cfg['route_sources']:,} sources of {route_stats['endpoints']:,} "
-          f"eligible ({limit}, seed {cfg['route_seed']}).")
+    tiers = route_stats["tiers"]
+    print(f"Routes: {route_stats['sampled']:,} sampled between "
+          + ", ".join(f"{tiers[t]:,} {t}" for t in TIERS)
+          + f" nodes (seed {cfg['route_seed']}).")
     print(f"Bucket liquidity split: general {cfg['general_pct']}%, "
           f"congestion {cfg['congestion_pct']}%, "
           f"protected {100 - cfg['general_pct'] - cfg['congestion_pct']}% "
@@ -533,6 +586,7 @@ def analyze(graph, cfg, source, csv_path=None):
     print_distribution_table("congestion", metrics, cdf,
                              cfg["prices"], cfg["thresholds"])
     print_percentile_table(cdf, cfg, metrics)
+    print_routability_matrix(route_cdfs, cfg, metrics)
     print_routability_table(route_cdfs, cfg, metrics)
 
     if csv_path:
@@ -639,15 +693,22 @@ def self_test():
     # Route bottlenecks, not per-channel values. Mirrors math.test.js: at
     # frac 0.5 a 100-sat payment needs a 200-sat bottleneck.
     route_cdfs = make_route_cdfs({
-        1: Counter({100: 2, 200: 5, 400: 3}),
-        3: Counter({100: 6, 200: 3, 400: 1}),
+        ("terminal", "terminal", 1): Counter({100: 2, 200: 5, 400: 3}),
+        ("terminal", "terminal", 3): Counter({100: 6, 200: 3, 400: 1}),
+        ("core", "core", 2): Counter({400: 4}),
     })
-    assert abs(route_routability(route_cdfs[1], 100, 0.5) - 0.8) < 1e-12
-    assert abs(route_routability(route_cdfs[3], 100, 0.5) - 0.4) < 1e-12
-    assert route_routability(route_cdfs[1], 100, 0) == 0.0
+    tt = route_cdfs["terminal"]["terminal"]
+    assert abs(route_routability(tt[1], 100, 0.5) - 0.8) < 1e-12
+    assert abs(route_routability(tt[3], 100, 0.5) - 0.4) < 1e-12
+    assert route_routability(tt[1], 100, 0) == 0.0
     assert route_routability(None, 100, 0.5) == 0.0
-    assert route_routability(route_cdfs[1], 1, 0.5) == 1.0
-    assert route_routability(route_cdfs[1], 10**9, 0.5) == 0.0
+    assert route_routability(tt[1], 1, 0.5) == 1.0
+    assert route_routability(tt[1], 10**9, 0.5) == 0.0
+    # "all" merges the hop buckets rather than conditioning on route length.
+    assert tt["all"].total == 20, tt["all"].total
+    assert abs(route_routability(tt["all"], 100, 0.5) - 0.6) < 1e-12
+    assert route_routability(route_cdfs["core"]["core"]["all"], 100, 0.5) == 1.0
+    assert "core" not in route_cdfs["terminal"], route_cdfs["terminal"].keys()
     assert make_route_cdfs({}) == {}
     # Ordinal row labels match app.js's fmtPctile.
     assert _fmt_pctile(10) == "10th percentile"
@@ -727,20 +788,29 @@ def main(argv=None):
                              "(default: 0.1 1 5 10 50 100 500 1000 10000)")
     parser.add_argument("--saturation-trials", type=int, default=3000, metavar="N",
                         help="Monte-Carlo trials for saturation (default: 3000)")
-    parser.add_argument("--route-sources", type=int, default=DEFAULT_SOURCES,
-                        metavar="N",
-                        help="route-sample source nodes (default: %(default)s)")
-    parser.add_argument("--route-per-source", type=int,
-                        default=DEFAULT_PER_SOURCE, metavar="N",
-                        help="destinations per source (default: %(default)s)")
+    parser.add_argument("--transit-sources", type=int,
+                        default=DEFAULT_TRANSIT_SOURCES, metavar="N",
+                        help="trees used to estimate betweenness "
+                             "(default: %(default)s)")
+    parser.add_argument("--sources-per-tier", type=int,
+                        default=DEFAULT_SOURCES_PER_TIER, metavar="N",
+                        help="route-sample sources per role "
+                             "(default: %(default)s)")
+    parser.add_argument("--per-dest-tier", type=int,
+                        default=DEFAULT_PER_DEST_TIER, metavar="N",
+                        help="destinations per source, per role "
+                             "(default: %(default)s)")
+    parser.add_argument("--core-transit-share", type=float,
+                        default=CORE_TRANSIT_SHARE, metavar="F",
+                        help="core is the smallest set carrying this share of "
+                             "transit (default: %(default)s)")
+    parser.add_argument("--route-pair", nargs=2, default=["terminal", "terminal"],
+                        metavar=("SENDER", "RECEIVER"),
+                        help="roles for the by-route-length table "
+                             "(default: terminal terminal)")
     parser.add_argument("--route-seed", type=int, default=DEFAULT_SEED,
                         metavar="N",
                         help="route sampling seed (default: %(default)s)")
-    parser.add_argument("--endpoint-max-degree", type=int,
-                        default=DEFAULT_MAX_DEGREE, metavar="N",
-                        help="only nodes with N channels or fewer may send or "
-                             "receive; 0 for no restriction "
-                             "(default: %(default)s)")
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -789,10 +859,12 @@ def main(argv=None):
         "percentile_price": args.percentile_price,
         "payments": args.payments,
         "trials": args.saturation_trials,
-        "route_sources": args.route_sources,
-        "route_per_source": args.route_per_source,
+        "transit_sources": args.transit_sources,
+        "sources_per_tier": args.sources_per_tier,
+        "per_dest_tier": args.per_dest_tier,
+        "core_transit_share": args.core_transit_share,
+        "route_pair": tuple(args.route_pair),
         "route_seed": args.route_seed,
-        "endpoint_max_degree": args.endpoint_max_degree,
     }
 
     with open(args.graph) as fh:

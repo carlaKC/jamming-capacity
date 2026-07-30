@@ -59,12 +59,13 @@ exits non-zero on the command line.
 - **General-bucket routability**: what share of routes keeps moving through the
   general bucket with no reputation, against payment size. Measured over real
   routes sampled from the graph, not composed from a per-hop probability. A
-  heatmap sweeps one to six hops. Set the payment size by typing it or by
-  dragging across either the chart or the heatmap; the shaded band marks the
-  $10–$200 range where everyday payments sit.
+  3×3 matrix picks who is paying whom — every node is sorted into a routing
+  role, and the chart, tiles and heatmap all follow the selected cell. Set the
+  payment size by typing it or by dragging across either the chart or the
+  heatmap; the shaded band marks the $10–$200 range where everyday payments sit.
 
-At the defaults, a $50 payment at $75k/BTC clears a one-hop route 5.5% of the
-time and a three-hop route 4.3%.
+At the defaults, a $50 payment at $75k/BTC clears 4.6% of routes between two
+terminal nodes, rising to 13.9% when a peripheral node pays a core one.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction
@@ -79,11 +80,25 @@ such nodes are still sampled as route endpoints.
 
 `build_data.py` walks the real graph, and the page reads the result:
 
-- Endpoints are drawn uniformly from **edge nodes** — those with five channels
-  or fewer (`--endpoint-max-degree`), which is 13,309 of the graph's nodes.
-  Payments start and finish at wallets, not at the routing hubs in the middle;
-  hubs stay in the graph and carry the traffic, they are just never addressed.
-  This reproduces the spoke → hub → … → hub → spoke shape without asserting it.
+- Every node is sorted into a **routing role** by betweenness — how often it
+  sits in the middle of somebody else's shortest path:
+
+  | role | nodes | definition |
+  |---|---|---|
+  | terminal | 12,281 | never an intermediate on anyone's path |
+  | peripheral | 2,814 | forwards, but outside the core |
+  | core | 661 | the smallest set carrying 90% of all transit |
+
+  Only `terminal` and `core` are defined outright; `peripheral` is the
+  remainder. Degree is the obvious axis and is the wrong one — the roles
+  overlap heavily in channel count, so a degree threshold misclassifies a large
+  minority. Channel size separates nodes better than either, but it is what the
+  page then measures, so tiering on it would make the result circular.
+- Sampling is **stratified**: equal sources from each role, equal destinations
+  per receiver role. Uniform draws would put core-to-core at 0.2% × 0.2% and it
+  would never fill in. Every cell gets 8,000–10,000 routes, so cells are
+  comparable with each other — but there is no meaningful overall figure to
+  read off the matrix.
 - Each pair is routed by shortest hop count, cheapest among equals. Scoring on
   fee alone chases zero-fee channels through five- and six-hop paths, which is
   not what a sender picks.
@@ -101,20 +116,29 @@ Because the general allocation is the same fraction `f` of every channel's
 bottleneck therefore depends only on the topology, so every bucket parameter on
 the page stays live against a frozen route sample.
 
-Hop counts are different populations of node pairs, so the rows are not nested,
-and short routes are not the best case. A one-hop route exists precisely because
-both endpoints hang off the *same* hub — median degree 812 — and a hub with
-hundreds of channels holds small ones to each of its leaves:
+### Who pays whom
 
-| | delivery-hop median | clears $50 | destination degree | last forwarder degree |
-|---|---|---|---|---|
-| 1 hop | 59,400 sat | 5.5% | 1 | 812 |
-| 2 hops | 675,000 sat | 18.5% | 2 | 663 |
-| 3 hops | 297,000 sat | 11.8% | 1 | 558 |
+At $50, rows the sender's role and columns the receiver's:
 
-The interior hub-to-hub channels are generous (5.9M sat median at two hops); it
-is the last mile into the destination that binds. This is why the one-hop and
-three-hop curves cross rather than nesting.
+```
+              terminal  peripheral        core
+terminal          4.6%        9.8%       12.6%
+peripheral        5.4%       11.7%       13.9%
+core              5.3%       11.5%       13.7%
+```
+
+**The receiver dominates.** Along a row (changing who is paid) clearance nearly
+triples; down a column (changing who pays) it barely moves. That falls out of
+the sender's own first channel never being gated: your role only shapes the
+route, while theirs sets the last gated channel.
+
+Hop counts are different populations of node pairs, so the heatmap rows are not
+nested and short routes are not the best case. A one-hop route exists precisely
+because both endpoints hang off the same large hub, and a hub with hundreds of
+channels holds small ones to each of its leaves — so its single gated channel is
+a bad one. The interior hub-to-hub channels are generous; it is the last mile
+that binds, which is why the one-hop and three-hop curves cross rather than
+nesting.
 
 ## Screenshots
 
@@ -152,8 +176,9 @@ All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--prices`, `--thresholds`, `--percentiles`,
-`--percentile-price`, `--percentile-type`, `--payments`, `--route-sources`,
-`--route-per-source`, `--route-seed`, `--endpoint-max-degree`);
+`--percentile-price`, `--percentile-type`, `--payments`, `--transit-sources`,
+`--sources-per-tier`, `--per-dest-tier`, `--core-transit-share`, `--route-pair`,
+`--route-seed`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above. It re-samples routes from
 the graph rather than reading `data.js`, so with the default seed it reproduces
@@ -168,10 +193,11 @@ fresh `lncli describegraph` dump:
 python3 build_data.py mainnet.json --output data.js
 ```
 
-This also re-samples the routes behind the routability section
-(`--sources`, `--per-source`, `--route-seed`, `--endpoint-max-degree`), which
-takes about 25 seconds. Pass `--endpoint-max-degree 0` to lift the endpoint
-restriction and let hubs send and receive as well.
+This also classifies nodes by role and re-samples the routes behind the
+routability section (`--transit-sources`, `--sources-per-tier`,
+`--per-dest-tier`, `--core-transit-share`, `--route-seed`), which takes about
+35 seconds. `--core-transit-share 0.5` gives a much tighter core — the 61 nodes
+carrying half of all transit — if you want the roles further apart.
 
 ## Tests
 
