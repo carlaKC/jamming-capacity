@@ -103,7 +103,7 @@ h1 {
 }
 .param-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 20px;
   align-items: start;
 }
@@ -460,6 +460,15 @@ select.corner-select {
   transition: border-color 300ms ease, box-shadow 300ms ease;
 }
 select.corner-select + select.corner-select { margin-left: 6px; }
+/* The price is set in Parameters now, so the corner states it rather than
+   offering a second place to change it. */
+.corner-note {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.corner-note + select.corner-select { margin-left: 8px; }
 select.corner-select:hover { border-color: var(--clay); }
 select.corner-select:focus-visible {
   outline: none;

@@ -35,7 +35,9 @@
     prices: [50000, 75000, 100000],
     thresholds: [1, 5, 10, 25, 50, 100, 250, 500],
     tab: "general",
-    pctPrice: DEFAULT_PRICE,
+    // The current BTC price, used wherever the page turns sats into dollars
+    // outside the distribution table (whose columns are their own price list).
+    price: DEFAULT_PRICE,
     pctType: 483,
   };
 
@@ -68,6 +70,12 @@
     return n + (["th", "st", "nd", "rd"][Math.abs(n) % 10] || "th");
   }
   const fmtPctile = (p) => ordinal(p) + " percentile";
+  // Short money for chart labels: cents only where the figure needs them.
+  function fmtUsdShort(x) {
+    if (x >= 100) return "$" + Math.round(x).toLocaleString("en-US");
+    if (x >= 1) return "$" + (Math.round(x * 10) / 10).toLocaleString("en-US");
+    return "$" + (Math.round(x * 100) / 100).toFixed(2);
+  }
   const compactUsd = (x) =>
     x >= 1000
       ? (x / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }) + "k"
@@ -421,15 +429,13 @@
     return select;
   }
 
-  const pctPrice = () =>
-    state.prices.includes(state.pctPrice) ? state.pctPrice : DEFAULT_PRICE;
   const pctType = () =>
     state.channelTypes.includes(state.pctType)
       ? state.pctType
       : Math.max(...state.channelTypes);
 
   function renderPercentiles() {
-    const price = pctPrice();
+    const price = state.price;
     // Under fixed slots every channel type gives the same fracs, so there is
     // nothing to choose; under percentage slots they scale with the type.
     const fixed = state.slotMode === "fixed";
@@ -439,7 +445,8 @@
 
     $("pct-caption").textContent =
       "What the edge at each percentile of the whole graph can forward, in " +
-      "USD. Percentiles are over all " + fmtInt(FULL_CDF.total) +
+      "USD at " + fmtUsd(price) + " / BTC. Percentiles are over all " +
+      fmtInt(FULL_CDF.total) +
       " directed edges; greyed rows are below the current filter and are " +
       "excluded from the tables above. Hover a cell for sat values.";
 
@@ -448,11 +455,7 @@
     const hr = el("tr");
 
     const corner = el("th", "row-head");
-    corner.appendChild(cornerSelect(
-      "BTC price for the percentile table",
-      [...state.prices].sort((a, b) => a - b), price,
-      (p) => "@ $" + compactUsd(p) + " / BTC",
-      (p) => { state.pctPrice = p; }));
+    corner.appendChild(el("span", "corner-note", "@ $" + compactUsd(price) + " / BTC"));
     if (!fixed) {
       corner.appendChild(cornerSelect(
         "Channel type for the percentile table",
@@ -596,8 +599,9 @@
         "Histogram of advertised max_htlc across the graph's directed edges, " +
         "on a log scale from 1 satoshi to 1 billion. " +
         (floor > 0
-          ? "Bars below the " + compactSat(floor) +
-            " satoshi filter are greyed out."
+          ? "Bars below the " + compactSat(floor) + " satoshi filter, worth " +
+            fmtUsdShort(M.satToUsd(floor, state.price)) +
+            " at the current price, are greyed out."
           : "No filter is applied, so every bar is included."),
     });
 
@@ -650,10 +654,12 @@
         x: x - 4, y: GPAD.top - 8, width: 8, height: 12, rx: 4,
         fill: "#A85448", class: "hist-grip",
       }));
+      // Dollars, not sats: the axis already carries the sat scale, and what a
+      // reader wants from the handle is what the cutoff is worth.
       node.appendChild(svg("text", {
         x: Math.min(x + 10, GPAD.left + GPW - 4), y: GPAD.top + 10,
         class: "chart-label", fill: "#A85448",
-      }, compactSat(floor) + " sat"));
+      }, fmtUsdShort(M.satToUsd(floor, state.price))));
     }
 
     for (let d = 0; d <= HIST_DECADES; d++) {
@@ -748,6 +754,15 @@
   const FULL_VALUE = M.histValueTotal(DATA.hist);
 
   function renderFilter() {
+    // Written from the constants and the live price rather than the markup, so
+    // the stated dollar figure cannot drift from what the page applies.
+    $("filter-default-note").textContent =
+      "We set this value to a default of " + fmtInt(DEFAULT_MIN_HTLC_SAT) +
+      " sat, which is around " +
+      fmtUsdShort(M.satToUsd(DEFAULT_MIN_HTLC_SAT, state.price)) +
+      " at " + fmtUsd(state.price) + " / BTC, as this is the cutoff " +
+      "we're considering.";
+
     const kept = CDF.total;
     const total = FULL_CDF.total;
     const removed = total - kept;
@@ -807,15 +822,6 @@
   }
 
   function mountFilterControl() {
-    // Written from the constants rather than the markup, so the stated dollar
-    // figure cannot drift from the default the page actually applies.
-    $("filter-default-note").textContent =
-      "We set this value to a default of " + fmtInt(DEFAULT_MIN_HTLC_SAT) +
-      " sat, which is around " +
-      fmtUsd(Math.round(M.satToUsd(DEFAULT_MIN_HTLC_SAT, DEFAULT_PRICE))) +
-      " at " + fmtUsd(DEFAULT_PRICE) + " / BTC, as this is the cutoff " +
-      "we're considering.";
-
     const sel = $("min-htlc");
     for (const sat of HTLC_FLOORS) {
       const opt = el("option", null,
@@ -967,6 +973,23 @@
   for (const btn of document.querySelectorAll(".mode[data-slot-mode]")) {
     btn.addEventListener("click", () => setSlotMode(btn.dataset.slotMode));
   }
+
+  // ---------------- current price ----------------
+
+  function onPriceInput() {
+    const v = readNumber($("btc-price"));
+    const ok = Number.isFinite(v) && v > 0;
+    $("btc-price").classList.toggle("invalid", !ok);
+    if (!ok) {
+      setError("price-error", "Enter a price above zero.");
+      return;
+    }
+    setError("price-error", null);
+    state.price = v;
+    renderAll();
+  }
+
+  $("btc-price").addEventListener("input", onPriceInput);
 
   // ---------------- per-peer allocation ----------------
 

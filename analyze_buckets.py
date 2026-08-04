@@ -397,7 +397,7 @@ def _fmt_pctile(p):
 def print_percentile_table(full_cdf, cfg, metrics, col=19, label_col=18):
     n = cfg["percentile_type"]
     m = next(x for x in metrics if x["n"] == n)
-    price = cfg["percentile_price"]
+    price = cfg["current_price"]
     floor = cfg["min_max_htlc"]
 
     print("-" * 78)
@@ -653,9 +653,10 @@ def main(argv=None):
     parser.add_argument("--percentiles", type=float, nargs="+",
                         default=[10, 25, 50, 75, 90, 99], metavar="P",
                         help="max_htlc percentile rows (default: 10 25 50 75 90 99)")
-    parser.add_argument("--percentile-price", type=float, default=75_000,
+    parser.add_argument("--current-price", type=float, default=75_000,
                         metavar="USD",
-                        help="BTC price for the percentile table (default: 75000)")
+                        help="BTC price the percentile table reads in, matching "
+                             "the page's Current price control (default: 75000)")
     parser.add_argument("--percentile-type", type=int, default=None, metavar="N",
                         help="channel type for the percentile table "
                              "(default: the largest --channel-types entry)")
@@ -713,7 +714,7 @@ def main(argv=None):
         "channel_types": args.channel_types,
         "percentile_type": percentile_type,
         "percentiles": args.percentiles,
-        "percentile_price": args.percentile_price,
+        "current_price": args.current_price,
         "min_max_htlc": args.min_max_htlc,
         "general_pct": args.general_pct,
         "congestion_pct": args.congestion_pct,

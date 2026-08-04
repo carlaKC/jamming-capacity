@@ -25,9 +25,14 @@ distribution** and **Channel percentiles** — each collapsible by its heading.
   random slot assignment), and liquidity limits as a percentage of
   `max_htlc_value_in_flight_msat`.
 
-The channel types (483 / 114 / 50) and BTC prices ($50k / $75k / $100k) are
-fixed on the page; `analyze_buckets.py` takes `--channel-types` and `--prices`
-to vary them.
+The channel types (483 / 114 / 50) and the distribution table's three BTC price
+columns ($50k / $75k / $100k) are fixed on the page; `analyze_buckets.py` takes
+`--channel-types` and `--prices` to vary them.
+
+Separately, **Current price** in the Parameters row sets the one rate the rest
+of the page converts sats at — the filter handle's dollar figure and the
+percentile table. It defaults to $75,000 / BTC, offers presets from a dropdown
+and takes any value you type. On the command line it is `--current-price`.
 
 **Liquidity** is always split by percentage of `max_htlc_value_in_flight_msat`
 — general and congestion, with protected taking the remainder.
@@ -64,8 +69,9 @@ exits non-zero on the command line.
 
 - **Channel percentiles**: the inverse question — what the edge at a given
   `max_htlc` percentile can forward through one general slot, two, a peer's
-  whole allocation, or a congestion slot. The corner cell picks the BTC price,
-  and the channel type too under percentage slots; hover a cell for sat values.
+  whole allocation, or a congestion slot. It reads in the **Current price** set
+  in Parameters, which the corner cell states; under percentage slots the
+  corner also picks the channel type. Hover a cell for sat values.
 
   Percentiles are taken over the **whole** graph rather than the filtered set,
   so a row means the same edge whatever the filter is doing and the rows stay
@@ -99,7 +105,9 @@ Below the control sits a histogram of advertised `max_htlc` across all directed
 edges, four bars per power of ten from 1 sat to 1 G sat. Filtered bars grey out.
 Because a bar covers a range of values, a floor landing inside one cuts that bar
 in two rather than colouring the whole thing by which side its edge falls on; a
-rule marks the cut.
+rule marks the cut. The handle is labelled in dollars at the current price —
+the axis already carries the sat scale, and what a reader wants from the handle
+is what the cutoff is worth.
 
 The histogram is also the control. Hovering a bar states its range, how many
 edges it holds and what share of the graph that is, and — where the filter cuts
@@ -148,7 +156,7 @@ All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--min-max-htlc`, `--prices`, `--thresholds`, `--percentiles`,
-`--percentile-price`, `--percentile-type`);
+`--current-price`, `--percentile-type`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above. It reads the graph dump
 directly rather than `data.js`.

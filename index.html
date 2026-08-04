@@ -61,6 +61,24 @@
       <label>Percent <input type="number" id="alloc-pct" value="5" min="0" max="100" step="0.5"></label>
       <p class="error hidden" id="alloc-error"></p>
     </section>
+
+    <section class="param-group">
+      <h3>Current price</h3>
+      <p class="hint">converts sats to dollars across the page</p>
+      <label>USD / BTC
+        <input type="number" id="btc-price" value="75000" min="1" step="1000"
+               list="price-presets">
+      </label>
+      <datalist id="price-presets">
+        <option value="25000"></option>
+        <option value="50000"></option>
+        <option value="75000"></option>
+        <option value="100000"></option>
+        <option value="150000"></option>
+        <option value="200000"></option>
+      </datalist>
+      <p class="error hidden" id="price-error"></p>
+    </section>
   </div>
 </section>
 <section id="filtering">
