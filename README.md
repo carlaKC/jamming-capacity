@@ -73,9 +73,18 @@ Because a bar covers a range of values, a floor landing inside one cuts that bar
 in two rather than colouring the whole thing by which side its edge falls on; a
 rule marks the cut.
 
-The offered floors run from 1 k to 10 M sat. The largest still leaves about an
-eighth of the edges in view, so no choice can empty the tables. On the command
-line the same control is `--min-max-htlc SAT`.
+The histogram is also the control. Hovering a bar states its range, how many
+edges it holds and what share of the graph that is, and — where the filter cuts
+through it — how many of its edges fall each side of the cut. Dragging across
+the plot moves the filter, at two significant figures rather than snapped to the
+dropdown's presets; the dropdown grows an entry for whatever the drag picks, so
+the two controls always agree. Dragging off the left end clears the filter.
+
+The dropdown offers floors from 1 k to 10 M sat, the largest of which still
+leaves about an eighth of the edges in view. A drag can go further, but stops at
+the largest advertised `max_htlc` so it can never empty the graph and leave the
+tables a wall of `n/a`. On the command line the same control is
+`--min-max-htlc SAT`.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction

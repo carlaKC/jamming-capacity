@@ -192,6 +192,10 @@ h1 {
 .hist-bar { fill: var(--moss); }
 /* Filtered-out bars stay visible as shape, but drop out of the reading. */
 .hist-bar-out { fill: #C9C6BC; }
+/* The whole plot is the filter's grab area, not just the 1.5px rule. */
+.chart-overlay { cursor: ew-resize; }
+.hist-grip { cursor: ew-resize; }
+body.dragging-cursor { cursor: ew-resize; user-select: none; }
 
 main {
   max-width: 1200px;

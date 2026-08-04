@@ -452,6 +452,48 @@
   const gx = (sat) => GPAD.left + (Math.log10(sat) / HIST_DECADES) * GPW;
   const gy = (count) => GPAD.top + (1 - (HIST_MAX ? count / HIST_MAX : 0)) * GPH;
 
+  // Bars sit on the axis, so only the top corners round -- and a bar cut by the
+  // filter rounds only its outer top corner, so the two segments still read as
+  // one bar. Radius shrinks on narrow or short bars rather than swallowing them.
+  function barPath(x, y, w, h, roundLeft, roundRight) {
+    const r = Math.max(0, Math.min(4, w / 2, h));
+    const rl = roundLeft ? r : 0;
+    const rr = roundRight ? r : 0;
+    return "M" + x + " " + (y + h) +
+      "L" + x + " " + (y + rl) +
+      (rl ? "A" + rl + " " + rl + " 0 0 1 " + (x + rl) + " " + y : "L" + x + " " + y) +
+      "L" + (x + w - rr) + " " + y +
+      (rr ? "A" + rr + " " + rr + " 0 0 1 " + (x + w) + " " + (y + rr) : "") +
+      "L" + (x + w) + " " + (y + h) + "Z";
+  }
+
+  // Edge counts straight off the unfiltered CDF, so a bar the filter cuts can
+  // state how many of its edges fall each side of the cut.
+  const edgesAtOrAbove = (sat) =>
+    Math.round(M.shareAtOrAbove(FULL_CDF, sat) * FULL_CDF.total);
+  const edgesIn = (lo, hi) => edgesAtOrAbove(lo) - edgesAtOrAbove(hi);
+
+  function showBarTooltip(b, x, y) {
+    const floor = state.minHtlcSat;
+    const lines = [
+      el("div", "tt-value", compactSat(b.lo) + " – " + compactSat(b.hi) + " sat"),
+      el("div", "tt-line", fmtInt(b.count) + " edges — " +
+        fmtPct(FULL_CDF.total ? b.count / FULL_CDF.total : 0, 1) + " of the graph"),
+    ];
+    if (floor >= b.hi) {
+      lines.push(el("div", "tt-line", "filtered out"));
+    } else if (floor > b.lo) {
+      lines.push(el("div", "tt-line", "cut by the filter — " +
+        fmtInt(edgesIn(b.lo, floor)) + " dropped, " +
+        fmtInt(edgesIn(floor, b.hi)) + " kept"));
+    } else {
+      lines.push(el("div", "tt-line", "in view"));
+    }
+    lines.push(el("div", "tt-line", "drag to move the filter"));
+    tooltip.replaceChildren(...lines);
+    placeTooltip(x, y);
+  }
+
   function renderHistogram() {
     const floor = state.minHtlcSat;
     const node = svg("svg", {
@@ -488,13 +530,20 @@
       // part of it. Cut the rectangle at the floor rather than colouring the
       // whole bar by which side its edge falls on.
       const cut = Math.min(x1, Math.max(x0, gx(Math.max(1, floor))));
-      const seg = (a, w, cls) => {
+      const seg = (a, w, cls, roundLeft, roundRight) => {
         if (w <= 0.05) return;
-        const rect = svg("rect", { x: a, y, width: w, height: h, class: cls });
-        node.appendChild(rect);
+        // 1px of surface between bars, so neighbours read as separate.
+        node.appendChild(svg("path", {
+          d: barPath(a, y, Math.max(0.5, w - 1), h, roundLeft, roundRight),
+          class: cls,
+        }));
       };
-      if (floor > 0) seg(x0, cut - x0, "hist-bar hist-bar-out");
-      seg(floor > 0 ? cut : x0, x1 - (floor > 0 ? cut : x0), "hist-bar");
+      if (floor > 0) {
+        seg(x0, cut - x0, "hist-bar hist-bar-out", true, cut >= x1);
+        seg(cut, x1 - cut, "hist-bar", cut <= x0, true);
+      } else {
+        seg(x0, x1 - x0, "hist-bar", true, true);
+      }
     }
 
     if (floor > 0) {
@@ -503,8 +552,14 @@
         x1: x, y1: GPAD.top - 2, x2: x, y2: GPAD.top + GPH,
         stroke: "#A85448", "stroke-width": 1.5,
       }));
+      // A grip at the top of the rule, so the cut reads as something you can
+      // take hold of rather than a plain annotation.
+      node.appendChild(svg("rect", {
+        x: x - 4, y: GPAD.top - 8, width: 8, height: 12, rx: 4,
+        fill: "#A85448", class: "hist-grip",
+      }));
       node.appendChild(svg("text", {
-        x: Math.min(x + 6, GPAD.left + GPW - 4), y: GPAD.top + 8,
+        x: Math.min(x + 10, GPAD.left + GPW - 4), y: GPAD.top + 10,
         class: "chart-label", fill: "#A85448",
       }, compactSat(floor) + " sat"));
     }
@@ -520,19 +575,101 @@
       class: "chart-axis-title",
     }, "advertised max_htlc, sat (log scale)"));
 
+    // One overlay across the plot carries both the hover and the drag, so the
+    // hit target is the whole plot rather than each bar and the 1.5px rule.
+    const overlay = svg("rect", {
+      x: GPAD.left, y: GPAD.top - 10, width: GPW, height: GPH + 10,
+      fill: "transparent", class: "chart-overlay",
+    });
+    const satAt = (clientX) => {
+      const box = node.getBoundingClientRect();
+      if (!box.width) return 0;
+      const px = ((clientX - box.left) / box.width) * GW;  // viewBox units
+      const decades = ((px - GPAD.left) / GPW) * HIST_DECADES;
+      return Math.pow(10, Math.min(HIST_DECADES, Math.max(0, decades)));
+    };
+    const bucketAt = (sat) => {
+      const i = Math.floor(Math.log10(Math.max(1, sat)) * HIST_PER_DECADE);
+      return HIST_BUCKETS[Math.min(HIST_BUCKETS.length - 1, Math.max(0, i))];
+    };
+    overlay.addEventListener("pointermove", (e) => {
+      if (!dragging) showBarTooltip(bucketAt(satAt(e.clientX)), e.clientX, e.clientY);
+    });
+    overlay.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      hideTooltip();
+      startFilterDrag(satAt);
+      setMinHtlc(snapFloor(satAt(e.clientX)));
+    });
+    node.appendChild(overlay);
+    node.addEventListener("pointerleave", () => { if (!dragging) hideTooltip(); });
+
     return node;
+  }
+
+  // ---------------- dragging the filter on the histogram ----------------
+
+  let dragging = false;
+
+  // Dragging lands on arbitrary reals; two significant figures is a number a
+  // person would have picked from the dropdown. Below the first bar there is
+  // nothing left to filter, so that end of the axis clears the filter. The top
+  // is capped at the largest advertised max_htlc: past that every edge is gone
+  // and the tables below are a wall of n/a.
+  const MAX_HTLC_SAT = DATA.hist.length ? DATA.hist[DATA.hist.length - 1][0] : 0;
+
+  function snapFloor(sat) {
+    if (!(sat > 1.5)) return 0;
+    const mag = Math.pow(10, Math.floor(Math.log10(sat)) - 1);
+    return Math.min(MAX_HTLC_SAT, Math.max(1, Math.round(sat / mag) * mag));
+  }
+
+  // Listeners live on the document so the drag survives the pointer leaving
+  // the plot, and so re-rendering the SVG mid-drag cannot orphan them.
+  function startFilterDrag(satAt) {
+    dragging = true;
+    document.body.classList.add("dragging-cursor");
+    let queued = null;
+    const move = (e) => {
+      // Coalesce to one re-render per frame: a move recomputes the CDF and
+      // every table under it.
+      if (queued !== null) cancelAnimationFrame(queued);
+      const x = e.clientX;
+      queued = requestAnimationFrame(() => {
+        queued = null;
+        setMinHtlc(snapFloor(satAt(x)));
+      });
+    };
+    const end = () => {
+      dragging = false;
+      if (queued !== null) cancelAnimationFrame(queued);
+      document.body.classList.remove("dragging-cursor");
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", end);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", end);
+  }
+
+  // A flat 0% or 100% next to a count that says otherwise reads as a bug, and
+  // the far end of the drag genuinely lands at 99.998%.
+  function fmtFilteredShare(removed, total) {
+    const pct = total > 0 ? (removed / total) * 100 : 0;
+    if (removed > 0 && pct < 0.05) return "under 0.1%";
+    if (removed < total && pct >= 99.95) return "over 99.9%";
+    return pct.toFixed(1) + "%";
   }
 
   function renderFilter() {
     const kept = CDF.total;
     const total = FULL_CDF.total;
     const removed = total - kept;
-    const share = total > 0 ? removed / total : 0;
     $("filter-share").textContent = state.minHtlcSat > 0
-      ? "Filtering " + fmtPct(share, 1) + " of the graph — " + fmtInt(removed) +
-        " of " + fmtInt(total) + " directed edges dropped, " + fmtInt(kept) +
-        " left."
+      ? "Filtering " + fmtFilteredShare(removed, total) + " of the graph — " +
+        fmtInt(removed) + " of " + fmtInt(total) +
+        " directed edges dropped, " + fmtInt(kept) + " left."
       : "No filter: all " + fmtInt(total) + " directed edges are in view.";
+    syncFilterSelect();
     $("filter-hist").replaceChildren(renderHistogram());
   }
 
@@ -545,9 +682,34 @@
   }
 
   function setMinHtlc(sat) {
+    // A drag crosses many pointer positions that snap to the floor already in
+    // force; rebuilding every table for those is wasted work.
+    if (sat === state.minHtlcSat) return;
     state.minHtlcSat = sat;
     CDF = sat > 0 ? M.makeCdf(M.filterHist(DATA.hist, sat)) : FULL_CDF;
     renderAll();
+  }
+
+  // The dropdown offers round floors; dragging the histogram can land between
+  // them. Rather than snapping the drag to the presets, the select grows a
+  // single extra option holding whatever the drag chose, so the two controls
+  // always agree on one value.
+  function syncFilterSelect() {
+    const sel = $("min-htlc");
+    const sat = state.minHtlcSat;
+    let custom = sel.querySelector("option[data-custom]");
+    if (HTLC_FLOORS.includes(sat)) {
+      if (custom) custom.remove();
+    } else {
+      if (!custom) {
+        custom = el("option");
+        custom.dataset.custom = "1";
+        sel.appendChild(custom);
+      }
+      custom.value = String(sat);
+      custom.textContent = "≥ " + compactSat(sat) + " sat";
+    }
+    sel.value = String(sat);
   }
 
   function mountFilterControl() {
@@ -556,7 +718,6 @@
       const opt = el("option", null,
         sat > 0 ? "≥ " + compactSat(sat) + " sat" : "No filter");
       opt.value = String(sat);
-      if (sat === state.minHtlcSat) opt.selected = true;
       sel.appendChild(opt);
     }
     sel.addEventListener("change", () => setMinHtlc(Number(sel.value)));
