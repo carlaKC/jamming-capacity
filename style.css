@@ -331,6 +331,10 @@ button.small:focus-visible, .tab:focus-visible {
   border-radius: 999px;
   margin-bottom: 14px;
 }
+/* .hidden sets display: none at equal specificity but is declared earlier, so
+   .tabs would win and the bucket selector would stay on screen under fixed
+   slots. Kept after the block as well, so order and specificity agree. */
+.tabs.hidden { display: none; }
 .tab {
   font: inherit;
   font-size: 14px;
