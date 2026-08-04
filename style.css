@@ -498,6 +498,9 @@ select.corner-select:focus-visible {
   box-shadow: 0 0 0 3px rgba(93, 112, 82, 0.25);
 }
 
+/* The percentile row headers carry a tooltip, so they read as hoverable. */
+#pct-wrap tbody th.row-head { cursor: help; }
+
 /* Rows the graph filter excludes. Same language as the histogram's greyed
    bars: still legible as shape, but out of the reading. */
 tbody tr.pct-excluded th,

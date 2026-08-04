@@ -73,7 +73,11 @@ exits non-zero on the command line.
   `max_htlc` percentile can forward through one general slot, two, a peer's
   whole allocation, or a congestion slot. It reads in the **Current price** set
   in Parameters, which the corner cell states; under percentage slots the
-  corner also picks the channel type. Hover a cell for sat values.
+  corner also picks the channel type. Hover a cell for sat values, or a row's
+  percentile label for how much of the network's advertised liquidity sits at
+  or below that percentile — the smaller half of edges hold 2.4% of it, and the
+  top 1% hold a third, which is the same count-versus-value gap the filter
+  reports.
 
   Percentiles are taken over the **whole** graph rather than the filtered set,
   so a row means the same edge whatever the filter is doing and the rows stay

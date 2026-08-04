@@ -6,6 +6,10 @@
   const M = window.BucketMath;
   const DATA = window.EDGE_DATA;
   const FULL_CDF = M.makeCdf(DATA.hist);
+  // The same CDF weighted by what each edge advertises rather than by one vote
+  // each, so shareAtOrAbove() reads out liquidity share. Built once: the
+  // percentile rows are over the whole graph, filter or no filter.
+  const VALUE_CDF = M.makeCdf(DATA.hist.map(([sat, count]) => [sat, sat * count]));
   const cdfFor = (sat) =>
     sat > 0 ? M.makeCdf(M.filterHist(DATA.hist, sat)) : FULL_CDF;
 
@@ -482,8 +486,11 @@
       const excluded = floor > 0 && isFinite(base) && base < floor;
       const tr = el("tr", excluded ? "pct-excluded" : null);
       const head = el("th", "row-head", fmtPctile(p));
-      if (excluded) head.title = "Below the " + compactSat(floor) +
-        " sat filter, so this edge is excluded from the tables above.";
+      if (isFinite(base)) {
+        head.dataset.pctile = String(p);
+        head.dataset.base = String(base);
+        head.dataset.excluded = excluded ? "1" : "";
+      }
       tr.appendChild(head);
       for (const c of PCT_COLUMNS) {
         const frac = c.frac(m);
@@ -1070,6 +1077,33 @@
     placeTooltip(x, y);
   }
 
+  // Hovering a percentile row states how much of the network's advertised
+  // liquidity sits at or below it. The count and the value diverge sharply --
+  // the smaller half of edges hold a fortieth of the liquidity -- which is the
+  // whole reason the filter reports both.
+  function showPctRowTooltip(th, x, y) {
+    const base = Number(th.dataset.base);
+    // Strictly-above uses base + 1 because sats are integers, so "at or below"
+    // keeps every edge tied at the percentile's own value.
+    const edgesBelow = 1 - M.shareAtOrAbove(FULL_CDF, base + 1);
+    const valueBelow = 1 - M.shareAtOrAbove(VALUE_CDF, base + 1);
+    const lines = [
+      el("div", "tt-value", fmtPctile(Number(th.dataset.pctile))),
+      el("div", "tt-line", "advertises " + fmtSat(base)),
+      el("div", "tt-line", "edges at or below hold " + fmtPct(valueBelow, 2) +
+        " of advertised liquidity"),
+      el("div", "tt-line", "that is " + fmtPct(edgesBelow, 1) + " of all " +
+        fmtInt(FULL_CDF.total) + " edges"),
+    ];
+    if (th.dataset.excluded) {
+      lines.push(el("div", "tt-line",
+        "below the " + compactSat(state.minHtlcSat) +
+        " sat filter, so excluded above"));
+    }
+    tooltip.replaceChildren(...lines);
+    placeTooltip(x, y);
+  }
+
   function showPctTooltip(td, x, y) {
     const d = td.dataset;
     const base = Number(d.base);
@@ -1096,7 +1130,10 @@
   }
 
   bindTooltip("table-wrap", "td[data-price]", showTooltip);
-  bindTooltip("pct-wrap", "td[data-sat]", showPctTooltip);
+  bindTooltip("pct-wrap", "td[data-sat], th[data-pctile]", (node, x, y) => {
+    if (node.tagName === "TH") showPctRowTooltip(node, x, y);
+    else showPctTooltip(node, x, y);
+  });
 
   // ---------------- boot ----------------
 
