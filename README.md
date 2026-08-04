@@ -35,11 +35,11 @@ to vary them.
 **Slots** can be split either way, via the toggle beside the "Bucket slots"
 heading:
 
-- **`%`** (default) — a percentage of `max_accepted_htlcs`, so each bucket
-  scales with the channel. 40/20 gives the 193/96/194, 45/22/47 and 20/10/20
-  splits from the proposal.
-- **`fixed`** — hard-set counts that don't scale, 30 and 10 by default.
-  Protected takes whatever is left, so only it varies by channel type.
+- **`fixed`** (default) — hard-set counts that don't scale, 30 and 10 by
+  default. Protected takes whatever is left, so only it varies by channel type.
+- **`%`** — a percentage of `max_accepted_htlcs`, so each bucket scales with
+  the channel. 40/20 gives the 193/96/194, 45/22/47 and 20/10/20 splits from
+  the proposal.
 
 Protected is derived in both modes and never editable. Fixed counts that
 wouldn't fit inside a selected channel type are refused rather than clamped:
@@ -63,8 +63,8 @@ exits non-zero on the command line.
   dragging across either the chart or the heatmap; the shaded band marks the
   $10–$200 range where everyday payments sit.
 
-At the defaults, a $50 payment at $75k/BTC clears a one-hop route 26.1% of the
-time and a three-hop route 4.6%.
+At the defaults, a $50 payment at $75k/BTC clears a one-hop route 41.2% of the
+time and a three-hop route 16.9%.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction

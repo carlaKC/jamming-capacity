@@ -47,8 +47,9 @@ MSAT_PER_SAT = 1_000
 # --------------------------------------------------------------------------
 # Pure bucket math — a faithful port of math.js so the numbers line up.
 # Liquidity is split by *percentage* of max_htlc_value_in_flight. Slots are
-# split by percentage of max_accepted_htlcs by default, or hard-set to fixed
-# counts with --slot-mode fixed. Protected takes the remainder either way.
+# hard-set to fixed counts by default, or split by percentage of
+# max_accepted_htlcs with --slot-mode pct. Protected takes the remainder
+# either way.
 # --------------------------------------------------------------------------
 
 def bucket_slots_pct(max_accepted_htlcs, general_pct, congestion_pct):
@@ -681,9 +682,9 @@ def main(argv=None):
                         help="general bucket %% of liquidity (default: 40)")
     parser.add_argument("--congestion-pct", type=float, default=20, metavar="P",
                         help="congestion bucket %% of liquidity (default: 20)")
-    parser.add_argument("--slot-mode", choices=("pct", "fixed"), default="pct",
-                        help="split slots by percentage or hard-set counts "
-                             "(default: pct)")
+    parser.add_argument("--slot-mode", choices=("pct", "fixed"), default="fixed",
+                        help="hard-set slot counts or split by percentage "
+                             "(default: fixed)")
     parser.add_argument("--general-slot-pct", type=float, default=40, metavar="P",
                         help="general bucket %% of max_accepted_htlcs "
                              "(--slot-mode pct; default: 40)")
