@@ -794,12 +794,36 @@
     $("filter-hist").replaceChildren(renderHistogram());
   }
 
+  // The routability section owns its own state and its own recompute schedule;
+  // it is handed the parameters it reads and decides for itself whether any of
+  // them moved. Routing the whole graph is far too expensive to redo on every
+  // keystroke in the Parameters row.
+  // The bands are cut at the same whole-graph percentiles the Channel
+  // percentiles table prints, so the two sections mean the same thing by
+  // "p25". Fixed values, taken over FULL_CDF rather than the filtered one, so
+  // moving the filter empties a band rather than moving where it sits.
+  const BAND_THRESHOLDS =
+    window.RoutabilityView.CUTS.map((p) => M.percentileSat(FULL_CDF, p));
+
+  function renderRoutability() {
+    window.RoutabilityView.update({
+      typeMetrics,
+      channelTypes: state.channelTypes,
+      slotMode: state.slotMode,
+      price: state.price,
+      minHtlcSat: state.minHtlcSat,
+      thresholds: BAND_THRESHOLDS,
+      shade: shadeCell,
+    });
+  }
+
   function renderAll() {
     const metrics = activeMetrics();
     renderFilter();
     renderMetrics(metrics);
     renderTable(metrics);
     renderPercentiles();
+    renderRoutability();
   }
 
   function setMinHtlc(sat) {
@@ -1032,12 +1056,14 @@
 
   // ---------------- tabs ----------------
 
-  for (const btn of document.querySelectorAll(".tab")) {
+  // Scoped to this table's own tabs: the routability section has a tab row of
+  // its own, and an unscoped .tab query would clear its selection and set
+  // state.tab to whatever that row's buttons carry.
+  const BUCKET_TABS = document.querySelectorAll("#bucket-tabs .tab");
+  for (const btn of BUCKET_TABS) {
     btn.addEventListener("click", () => {
       state.tab = btn.dataset.tab;
-      for (const b of document.querySelectorAll(".tab")) {
-        b.classList.toggle("active", b === btn);
-      }
+      for (const b of BUCKET_TABS) b.classList.toggle("active", b === btn);
       redrawTable();
     });
   }
@@ -1147,5 +1173,22 @@
   mountFilterControl();
   mountPriceControl();
   syncSlotModeUi();
+  // Formatting and the tooltip stay owned here, so the two files cannot drift
+  // into rendering the same figure two ways.
+  window.RoutabilityView.mount({
+    M,
+    GRAPH: window.GRAPH_DATA,
+    bindTooltip,
+    fmt: {
+      int: fmtInt,
+      sat: fmtSat,
+      usd: fmtUsd,
+      pct: fmtPct,
+      compactSat,
+    },
+    tip: {
+      show: (nodes, x, y) => { tooltip.replaceChildren(...nodes); placeTooltip(x, y); },
+    },
+  });
   renderAll();
 })();

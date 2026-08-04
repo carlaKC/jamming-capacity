@@ -218,8 +218,227 @@
     return cdf.sats[lo];
   }
 
+  // ---------------- routing over the real graph ----------------
+  //
+  // graph.js ships the topology in CSR form: off[u]..off[u+1] bracket node u's
+  // outbound directions in to[]/maxHtlc[]/baseMsat[]/ppm[]. Only directions
+  // that could actually forward are in it -- see build_data.py.
+
+  // Senders cap routes at 20 hops, so a path longer than that is not one
+  // anybody would build.
+  const MAX_HOPS = 20;
+
+  // Incoming-edge view of the same graph, for searching backwards from a
+  // destination. Derived data, so it is built here rather than shipped.
+  function reverseGraph(g) {
+    const n = g.n;
+    const m = g.to.length;
+    const off = new Int32Array(n + 2);
+    for (let i = 0; i < m; i++) off[g.to[i] + 2]++;
+    for (let i = 0; i < n; i++) off[i + 2] += off[i + 1];
+    const from = new Int32Array(m);
+    const maxHtlc = new Float64Array(m);
+    const baseMsat = new Float64Array(m);
+    const ppm = new Float64Array(m);
+    for (let u = 0; u < n; u++) {
+      for (let e = g.off[u]; e < g.off[u + 1]; e++) {
+        // off[v + 1] doubles as the fill cursor for v, leaving off[] as the
+        // finished offset array once every edge is placed.
+        const slot = off[g.to[e] + 1]++;
+        from[slot] = u;
+        maxHtlc[slot] = g.maxHtlc[e];
+        baseMsat[slot] = g.baseMsat[e];
+        ppm[slot] = g.ppm[e];
+      }
+    }
+    return { n, off: off.subarray(0, n + 1), from, maxHtlc, baseMsat, ppm };
+  }
+
+  // What a node can put into a single payment: its largest outbound max_htlc
+  // that survives the filter. A node left at zero has no way to originate one.
+  //
+  // The largest rather than the total, because the bands are read off the
+  // page's channel percentiles, which are percentiles of one edge's advertised
+  // max_htlc. Summing a node's channels would compare a total against a
+  // single-channel scale.
+  function nodePeak(g, minSat) {
+    const peak = new Float64Array(g.n);
+    for (let u = 0; u < g.n; u++) {
+      let best = 0;
+      for (let e = g.off[u]; e < g.off[u + 1]; e++) {
+        if (g.maxHtlc[e] >= minSat && g.maxHtlc[e] > best) best = g.maxHtlc[e];
+      }
+      peak[u] = best;
+    }
+    return peak;
+  }
+
+  // Sort the nodes that can originate into bands at fixed sat thresholds --
+  // the whole-graph edge percentiles the Channel percentiles table already
+  // uses. thresholds is ascending, so two of them give three bands, and a node
+  // sitting exactly on one falls to the lower band.
+  //
+  // Because the thresholds come from the whole graph they do not move with the
+  // filter: raising it empties a band from below rather than redrawing where
+  // the bands are, which is what keeps two settings comparable. Each band comes
+  // back sorted ascending, which is what lets pickByFraction() hold its
+  // positions steady.
+  function bandNodes(peak, thresholds) {
+    const groups = [];
+    for (let i = 0; i <= thresholds.length; i++) groups.push([]);
+    const live = [];
+    for (let u = 0; u < peak.length; u++) if (peak[u] > 0) live.push(u);
+    live.sort((a, b) => peak[a] - peak[b] || a - b);
+    for (const u of live) {
+      let band = thresholds.length;
+      for (let i = 0; i < thresholds.length; i++) {
+        if (peak[u] <= thresholds[i]) { band = i; break; }
+      }
+      groups[band].push(u);
+    }
+    return { groups, total: live.length };
+  }
+
+  // Pick sample members at fixed fractional positions in a rank-sorted band.
+  // Drawing fresh members whenever the band changes would make the figures jump
+  // between unrelated nodes every time the filter moves; holding the positions
+  // still lets the sample slide through the band as it grows or shrinks.
+  // Positions can collide in a small band, so the result is deduplicated.
+  function pickByFraction(sorted, fracs) {
+    const seen = new Set();
+    const out = [];
+    for (const f of fracs) {
+      if (!sorted.length) break;
+      const node = sorted[Math.min(sorted.length - 1, Math.floor(f * sorted.length))];
+      if (!seen.has(node)) { seen.add(node); out.push(node); }
+    }
+    return out;
+  }
+
+  // Evenly-distributed fractions in [0, 1), drawn once from a fixed seed so a
+  // reload lands on the same sample.
+  function sampleFractions(count, seed) {
+    const rand = mulberry32(seed === undefined ? 1280 : seed);
+    const out = [];
+    for (let i = 0; i < count; i++) out.push(rand());
+    return out;
+  }
+
+  // Cheapest way to deliver amountSat to dest, from every node at once.
+  //
+  // Searched backwards, because fees accumulate towards the sender: the amount
+  // that must flow over a hop is the amount its far end needs plus the fee the
+  // near end charges to forward it. So amt[x] is what x must receive for
+  // amountSat to arrive, and amt[x] - amountSat is the fee paid to get there --
+  // minimising one minimises the other, which is why there is no second cost
+  // array. Fees are non-decreasing in amount, so Dijkstra stays correct even
+  // though the edge weights depend on the running total.
+  //
+  // frac is the share of a channel's max_htlc the bucket admits, so a hop is
+  // only usable if frac x max_htlc covers what would flow over it. Pass 1 for
+  // the unrestricted case, where only the filter constrains a hop.
+  function routeCosts(rev, dest, amountSat, frac, minSat) {
+    const n = rev.n;
+    const amt = new Float64Array(n).fill(Infinity);
+    const hops = new Int32Array(n).fill(-1);
+    amt[dest] = amountSat;
+    hops[dest] = 0;
+    // Binary min-heap with lazy deletion: an improved node is pushed again and
+    // the stale copy is skipped on the way out.
+    const keys = [amountSat];
+    const nodes = [dest];
+    while (keys.length) {
+      const topKey = keys[0];
+      const v = nodes[0];
+      const lastKey = keys.pop();
+      const lastNode = nodes.pop();
+      if (keys.length) {
+        keys[0] = lastKey;
+        nodes[0] = lastNode;
+        let i = 0;
+        for (;;) {
+          const l = 2 * i + 1;
+          const r = l + 1;
+          let s = i;
+          if (l < keys.length && keys[l] < keys[s]) s = l;
+          if (r < keys.length && keys[r] < keys[s]) s = r;
+          if (s === i) break;
+          const k = keys[i]; keys[i] = keys[s]; keys[s] = k;
+          const d = nodes[i]; nodes[i] = nodes[s]; nodes[s] = d;
+          i = s;
+        }
+      }
+      if (topKey > amt[v]) continue;
+      const need = amt[v];
+      for (let e = rev.off[v]; e < rev.off[v + 1]; e++) {
+        const cap = rev.maxHtlc[e];
+        if (cap < minSat) continue;
+        if (frac * cap < need) continue;
+        const u = rev.from[e];
+        const cand = need + rev.baseMsat[e] / 1000 + (need * rev.ppm[e]) / 1e6;
+        if (cand >= amt[u]) continue;
+        amt[u] = cand;
+        hops[u] = hops[v] + 1;
+        let i = keys.length;
+        keys.push(cand);
+        nodes.push(u);
+        while (i > 0) {
+          const p = (i - 1) >> 1;
+          if (keys[p] <= keys[i]) break;
+          const k = keys[i]; keys[i] = keys[p]; keys[p] = k;
+          const d = nodes[i]; nodes[i] = nodes[p]; nodes[p] = d;
+          i = p;
+        }
+      }
+    }
+    return { amt, hops };
+  }
+
+  // Which nodes can pay dest, given a completed backwards search.
+  //
+  // The sender's own first hop is not bucket-constrained: the bucket applies at
+  // a forwarding node's outgoing channel, and the sender forwards nothing. So
+  // routeCosts() runs with the bucket applied to every hop -- correct for all
+  // of them but the first -- and the first is settled here against the raw
+  // max_htlc instead. Among qualifying first hops the cheapest wins, which is
+  // the one whose far end needs the least.
+  function sourceResults(g, dest, res, minSat, maxHops) {
+    const cap = maxHops === undefined ? MAX_HOPS : maxHops;
+    const n = g.n;
+    const ok = new Uint8Array(n);
+    const sent = new Float64Array(n).fill(Infinity);
+    const hops = new Int32Array(n).fill(-1);
+    for (let u = 0; u < n; u++) {
+      if (u === dest) continue;
+      for (let e = g.off[u]; e < g.off[u + 1]; e++) {
+        const limit = g.maxHtlc[e];
+        if (limit < minSat) continue;
+        const v = g.to[e];
+        const need = res.amt[v];
+        if (!isFinite(need) || limit < need) continue;
+        // res.hops[v] is the length of the cheapest path from v, so this drops
+        // a pair whose cheapest route is too long rather than searching for the
+        // cheapest route within the cap -- see the caveat on the page.
+        if (res.hops[v] + 1 > cap) continue;
+        if (need >= sent[u]) continue;
+        sent[u] = need;
+        hops[u] = res.hops[v] + 1;
+        ok[u] = 1;
+      }
+    }
+    return { ok, sent, hops };
+  }
+
   return {
     SAT_PER_BTC,
+    MAX_HOPS,
+    reverseGraph,
+    nodePeak,
+    bandNodes,
+    pickByFraction,
+    sampleFractions,
+    routeCosts,
+    sourceResults,
     bucketSlotsPct,
     bucketSlotsFixed,
     slotsFitType,

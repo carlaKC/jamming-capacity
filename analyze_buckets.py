@@ -11,6 +11,11 @@ two tables it prints match what the page renders.
   2. The distribution table: the share of mainnet directed edges able to carry
      a single HTLC of at least $X in the general / congestion bucket, across
      the BTC prices and dollar thresholds you configure.
+  3. The channel percentile table: what the edge at a given max_htlc percentile
+     can forward through each bucket.
+  4. The general routability heatmap: sampling real node pairs and routing
+     between them, the share that can still pay each other once the general
+     bucket applies to every forwarded hop.
 
 Base value `B` per direction is the advertised `max_htlc_msat` (the observable
 lower bound on `max_htlc_value_in_flight_msat`). Every advertising direction is
@@ -23,13 +28,14 @@ See PR: https://github.com/lightning/bolts/pull/1280
 import argparse
 import bisect
 import csv as csvmod
+import heapq
 import json
 import math
 import os
 import sys
 from collections import Counter, namedtuple
 
-from build_data import parse_graph
+from build_data import parse_graph, parse_routing_graph
 
 # --------------------------------------------------------------------------
 # Units.
@@ -430,6 +436,252 @@ def print_percentile_table(full_cdf, cfg, metrics, col=19, label_col=18):
 
 
 # --------------------------------------------------------------------------
+# General routability (mirrors routability.js): sample node pairs and route
+# between them with the general bucket's allocation on every forwarded hop.
+#
+# A port of the routing half of math.js. Nodes are banded by their largest
+# surviving max_htlc against the whole-graph percentiles the table above prints,
+# so the bands sit at fixed sat thresholds and raising --min-max-htlc empties a
+# band from below rather than moving it.
+#
+# Only directions that could actually forward are in this graph -- see
+# parse_routing_graph -- so it is a strict subset of the edges the tables above
+# count, and these shares are shares of that subset.
+# --------------------------------------------------------------------------
+
+# Senders cap routes at 20 hops, so a longer path is not one anybody builds.
+MAX_HOPS = 20
+ROUTE_CUTS = (25, 80)
+BAND_LABELS = ("edge", "periphery", "core")
+DEFAULT_PAYMENT_USD = 50
+# The page samples 100 destinations a band; 30 keeps a command-line run to a
+# few seconds and lands within a couple of points of it.
+DEFAULT_ROUTE_DESTS = 30
+DEFAULT_ROUTE_SEED = 1280
+
+
+def reverse_graph(g):
+    """Incoming-edge view of the CSR graph, for searching backwards."""
+    n, to = g["n"], g["to"]
+    m = len(to)
+    off = [0] * (n + 2)
+    for v in to:
+        off[v + 2] += 1
+    for i in range(n):
+        off[i + 2] += off[i + 1]
+    src = [0] * m
+    max_htlc = [0] * m
+    base = [0] * m
+    ppm = [0] * m
+    for u in range(n):
+        for e in range(g["off"][u], g["off"][u + 1]):
+            # off[v + 1] doubles as the fill cursor for v, leaving off[] as the
+            # finished offset array once every edge is placed.
+            slot = off[to[e] + 1]
+            off[to[e] + 1] += 1
+            src[slot] = u
+            max_htlc[slot] = g["maxHtlc"][e]
+            base[slot] = g["baseMsat"][e]
+            ppm[slot] = g["ppm"][e]
+    return {"n": n, "off": off[:n + 1], "from": src, "maxHtlc": max_htlc,
+            "baseMsat": base, "ppm": ppm}
+
+
+def node_peak(g, min_sat):
+    """Largest surviving outbound max_htlc per node; 0 means it cannot send."""
+    peak = [0] * g["n"]
+    for u in range(g["n"]):
+        best = 0
+        for e in range(g["off"][u], g["off"][u + 1]):
+            sat = g["maxHtlc"][e]
+            if sat >= min_sat and sat > best:
+                best = sat
+        peak[u] = best
+    return peak
+
+
+def band_nodes(peak, thresholds):
+    """Sort sendable nodes into bands at fixed thresholds, ties falling down."""
+    groups = [[] for _ in range(len(thresholds) + 1)]
+    live = sorted((u for u, p in enumerate(peak) if p > 0), key=lambda u: (peak[u], u))
+    for u in live:
+        band = len(thresholds)
+        for i, t in enumerate(thresholds):
+            if peak[u] <= t:
+                band = i
+                break
+        groups[band].append(u)
+    return groups, len(live)
+
+
+def sample_fractions(count, seed=DEFAULT_ROUTE_SEED):
+    rand = _mulberry32(seed)
+    return [rand() for _ in range(count)]
+
+
+def pick_by_fraction(sorted_band, fracs):
+    """Members at fixed fractional positions, so the sample slides with the
+    band rather than being redrawn every time the filter moves."""
+    seen, out = set(), []
+    for f in fracs:
+        if not sorted_band:
+            break
+        node = sorted_band[min(len(sorted_band) - 1, int(f * len(sorted_band)))]
+        if node not in seen:
+            seen.add(node)
+            out.append(node)
+    return out
+
+
+def route_costs(rev, dest, amount_sat, frac, min_sat):
+    """Cheapest way to deliver amount_sat to dest, from every node at once.
+
+    Searched backwards because fees accumulate towards the sender: amt[x] is
+    what x must receive for amount_sat to arrive, so amt[x] - amount_sat is the
+    fee paid, and minimising one minimises the other. frac is the share of a
+    channel's max_htlc the bucket admits; pass 1 for the unrestricted case.
+    """
+    n = rev["n"]
+    inf = float("inf")
+    amt = [inf] * n
+    hops = [-1] * n
+    amt[dest] = amount_sat
+    hops[dest] = 0
+    heap = [(amount_sat, dest)]
+    roff, rfrom = rev["off"], rev["from"]
+    rmax, rbase, rppm = rev["maxHtlc"], rev["baseMsat"], rev["ppm"]
+    while heap:
+        key, v = heapq.heappop(heap)
+        if key > amt[v]:
+            continue
+        need = amt[v]
+        for e in range(roff[v], roff[v + 1]):
+            cap = rmax[e]
+            if cap < min_sat or frac * cap < need:
+                continue
+            u = rfrom[e]
+            cand = need + rbase[e] / MSAT_PER_SAT + need * rppm[e] / 1e6
+            if cand < amt[u]:
+                amt[u] = cand
+                hops[u] = hops[v] + 1
+                heapq.heappush(heap, (cand, u))
+    return amt, hops
+
+
+def source_results(g, dest, amt, hops, min_sat, max_hops=MAX_HOPS):
+    """Which nodes can pay dest, given a completed backwards search.
+
+    The sender's own first hop is not bucket-constrained -- the bucket applies
+    where a node forwards, and the sender forwards nothing -- so it is settled
+    here against the raw max_htlc instead.
+    """
+    n = g["n"]
+    ok = [False] * n
+    out_hops = [-1] * n
+    inf = float("inf")
+    for u in range(n):
+        if u == dest:
+            continue
+        best = inf
+        for e in range(g["off"][u], g["off"][u + 1]):
+            limit = g["maxHtlc"][e]
+            if limit < min_sat:
+                continue
+            v = g["to"][e]
+            need = amt[v]
+            if need == inf or limit < need or hops[v] + 1 > max_hops:
+                continue
+            if need < best:
+                best = need
+                out_hops[u] = hops[v] + 1
+                ok[u] = True
+    return ok, out_hops
+
+
+def routability_cells(g, rev, groups, dests, amount_sat, frac, min_sat):
+    """cells[from][to] = (routable, pairs) over every sampled pair."""
+    size = len(BAND_LABELS)
+    cells = [[[0, 0] for _ in range(size)] for _ in range(size)]
+    for to in range(size):
+        for dest in dests[to]:
+            amt, hops = route_costs(rev, dest, amount_sat, frac, min_sat)
+            ok, _ = source_results(g, dest, amt, hops, min_sat)
+            for frm in range(size):
+                cell = cells[frm][to]
+                for u in groups[frm]:
+                    if u == dest:
+                        continue
+                    cell[1] += 1
+                    if ok[u]:
+                        cell[0] += 1
+    return cells
+
+
+def print_routability_table(graph, full_cdf, cfg, metrics, col=19, label_col=18):
+    g, gstats = parse_routing_graph(graph)
+    if not g["to"]:
+        print("no routable directions found; skipping routability",
+              file=sys.stderr)
+        return
+    rev = reverse_graph(g)
+    thresholds = [percentile_sat(full_cdf, p) for p in ROUTE_CUTS]
+    min_sat = cfg["min_max_htlc"]
+    groups, live = band_nodes(node_peak(g, min_sat), thresholds)
+    fracs = sample_fractions(cfg["route_dests"], cfg["route_seed"])
+    dests = [pick_by_fraction(band, fracs) for band in groups]
+
+    n = cfg["percentile_type"]
+    m = next(x for x in metrics if x["n"] == n)
+    frac = m["peer_general_frac"]
+    price = cfg["current_price"]
+    amount = usd_to_sat(cfg["payment_usd"], price)
+
+    cells = routability_cells(g, rev, groups, dests, amount, frac, min_sat)
+    base = routability_cells(g, rev, groups, dests, amount, 1.0, min_sat)
+
+    print("-" * 78)
+    print(f"General routability — {n}-slot channels")
+    print(f"Share of sampled node pairs that can route "
+          f"${cfg['payment_usd']:,.0f} ({amount:,.0f} sat at ${price:,.0f}/BTC)")
+    print(f"through the general bucket, with {fmt_pct(frac)} of each forwarded "
+          f"channel's")
+    print("max_htlc available. Unrestricted share in brackets.")
+    print(f"Routable graph: {len(g['to']):,} directions over {g['n']:,} nodes "
+          f"({gstats['noPolicy']:,} with no")
+    print(f"policy and {gstats['disabled']:,} disabled are not in it). "
+          f"{live:,} nodes can send at this filter.")
+    print(f"Bands by largest surviving max_htlc, cut at the whole-graph "
+          f"p{ROUTE_CUTS[0]} ({thresholds[0]:,.0f} sat)")
+    print(f"and p{ROUTE_CUTS[1]} ({thresholds[1]:,.0f} sat).")
+    print("-" * 78)
+
+    def band_label(i):
+        return f"{BAND_LABELS[i]} ({len(groups[i]):,})"
+
+    corner = "from / to"
+    header = "  " + f"{corner:<{label_col}}"
+    for i in range(len(BAND_LABELS)):
+        header += f"{band_label(i):>{col}}"
+    print(header)
+    for frm in range(len(BAND_LABELS)):
+        row = f"  {band_label(frm):<{label_col}}"
+        for to in range(len(BAND_LABELS)):
+            got, pairs = cells[frm][to]
+            if not pairs:
+                row += f"{'n/a':>{col}}"
+            else:
+                shown = (f"{got / pairs * 100:.1f}% "
+                         f"({base[frm][to][0] / pairs * 100:.1f}%)")
+                row += f"{shown:>{col}}"
+        print(row)
+    empty = [BAND_LABELS[i] for i in range(len(BAND_LABELS)) if not groups[i]]
+    if empty:
+        print(f"\n  The {', '.join(empty)} band is emptied by the "
+              f"{min_sat:,} sat filter.")
+    print()
+
+
+# --------------------------------------------------------------------------
 # Main analysis.
 # --------------------------------------------------------------------------
 
@@ -496,6 +748,9 @@ def analyze(graph, cfg, source, csv_path=None):
                                  cfg["prices"], cfg["thresholds"])
 
     print_percentile_table(full_cdf, cfg, metrics)
+
+    if cfg["routability"]:
+        print_routability_table(graph, full_cdf, cfg, metrics)
 
     if csv_path:
         _write_csv(csv_path, metrics, cdf, cfg)
@@ -615,6 +870,52 @@ def self_test():
     assert 100 < sat < 160, sat
     sat = channels_to_saturate(30, 5, trials=200)
     assert 21 < sat < 25, sat
+
+    # --- routing, against the same fixture build_data.py uses. Its routable
+    # subset is A->B, B->A, A->C, A->D, D->A, D->C: C->A and E->A never
+    # gossiped a policy, C->D is disabled, and E is in no routable direction.
+    from build_data import FIXTURE
+    g, _ = parse_routing_graph(FIXTURE)
+    rev = reverse_graph(g)
+    assert rev["n"] == 4 and len(rev["from"]) == 6
+    assert rev["off"][rev["n"]] == 6, rev["off"]
+    # A (0) is reached from B (1) and D (3); nothing reaches E, which is absent.
+    assert sorted(rev["from"][rev["off"][0]:rev["off"][1]]) == [1, 3]
+
+    # B pays C for 500 sat: B->A advertises 2000 and A->C 1500, so it clears
+    # unrestricted but not once a tenth of each forwarded hop is all that is
+    # available (A->C would need 5000).
+    amt, hops = route_costs(rev, 2, 500, 1.0, 0)
+    ok, out_hops = source_results(g, 2, amt, hops, 0)
+    assert ok[1] and out_hops[1] == 2, (ok, out_hops)
+    amt, hops = route_costs(rev, 2, 500, 0.1, 0)
+    assert not source_results(g, 2, amt, hops, 0)[0][1]
+    # A itself is a direct peer of C, so no hop is constrained and it clears
+    # either way -- the sender forwards nothing.
+    assert source_results(g, 2, amt, hops, 0)[0][0]
+
+    # Fees accumulate towards the sender: A->B charges 1000 msat + 100 ppm, so
+    # delivering 1000 sat to B needs A to send 1001.1.
+    amt, _ = route_costs(reverse_graph(g), 1, 1000, 1.0, 0)
+    assert abs(amt[0] - 1001.1) < 1e-9, amt[0]
+
+    # Bands, at thresholds either side of the fixture's values. Peaks are
+    # A 3960000, B 2000, C 0 (its only direction is unadvertised), D 3000.
+    peak = node_peak(g, 0)
+    assert peak == [3960000, 2000, 0, 3000], peak
+    groups, live = band_nodes(peak, [2500, 1_000_000])
+    assert live == 3 and groups == [[1], [3], [0]], groups
+    # A filter above a node's every channel takes it out of the population
+    # rather than moving where the bands sit.
+    groups, live = band_nodes(node_peak(g, 2500), [2500, 1_000_000])
+    assert live == 2 and groups == [[], [3], [0]], groups
+
+    # The sample holds fixed positions, so a shrinking band slides rather than
+    # being redrawn, and collisions deduplicate.
+    assert pick_by_fraction([10, 20, 30, 40], [0.0, 0.5, 0.99]) == [10, 30, 40]
+    assert pick_by_fraction([10, 20], [0.1, 0.2, 0.3]) == [10]
+    assert sample_fractions(4, 7) == sample_fractions(4, 7)
+    assert all(0 <= f < 1 for f in sample_fractions(30))
     print("analyze_buckets.py self-test: OK")
 
 
@@ -677,6 +978,20 @@ def main(argv=None):
                         help="dollar thresholds (default: 1 5 10 25 50 100 250 500)")
     parser.add_argument("--saturation-trials", type=int, default=3000, metavar="N",
                         help="Monte-Carlo trials for saturation (default: 3000)")
+    parser.add_argument("--payment-usd", type=float,
+                        default=DEFAULT_PAYMENT_USD, metavar="USD",
+                        help="payment size the routability heatmap routes "
+                             "(default: %(default)s)")
+    parser.add_argument("--route-dests", type=int,
+                        default=DEFAULT_ROUTE_DESTS, metavar="N",
+                        help="destinations sampled per band; the page uses 100 "
+                             "(default: %(default)s)")
+    parser.add_argument("--route-seed", type=int, default=DEFAULT_ROUTE_SEED,
+                        metavar="N",
+                        help="seed for the destination sample (default: %(default)s)")
+    parser.add_argument("--no-routability", action="store_true",
+                        help="skip the routability heatmap, which is the only "
+                             "table that walks the graph")
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -728,6 +1043,10 @@ def main(argv=None):
         "prices": args.prices,
         "thresholds": args.thresholds,
         "trials": args.saturation_trials,
+        "payment_usd": args.payment_usd,
+        "route_dests": args.route_dests,
+        "route_seed": args.route_seed,
+        "routability": not args.no_routability,
     }
 
     with open(args.graph) as fh:

@@ -15,8 +15,9 @@ it locally: open `index.html` — no build step, no server needed.
 ## What it shows
 
 The page has a **Parameters** row across the top, a **Filtering** section under
-it, and three result sections below that — **Channel statistics**, **Channel
-distribution** and **Channel percentiles** — each collapsible by its heading.
+it, and four result sections below that — **Channel statistics**, **Channel
+distribution**, **Channel percentiles** and **General routability** — each
+collapsible by its heading.
 
 - **Channel statistics**, per `max_accepted_htlcs`: slots per bucket
   (general / congestion / protected), per-peer general slot allocation
@@ -87,6 +88,65 @@ exits non-zero on the command line.
   reported share falls: dropping 20.2% of edges greys every row below the 20th
   percentile, so p10 greys and p25 stays. `analyze_buckets.py` marks the same
   rows `(filtered)`.
+
+- **General routability**: the other three sections ask what a single channel
+  can carry. This one asks whether a payment gets all the way across, by
+  routing between real node pairs. Nodes are banded by their largest advertised
+  `max_htlc` against the **same whole-graph percentiles** the table above
+  prints — `edge` to p25 (125,000 sat), `periphery` to p80 (5,630,259 sat),
+  `core` above it — and each cell of the 3×3 heatmap is the share of pairs
+  that can still pay each other once the general bucket's allocation applies to
+  every channel the payment is forwarded over. Hover a cell for the
+  unrestricted figure beside it, the gap between them, the pair count and the
+  median hop count. The payment size is a dropdown; the bucket tab picks a
+  single general slot or a peer's whole allocation.
+
+  Because the band thresholds come off the whole graph they do not move with
+  the filter, so two settings stay comparable — the filter empties a band from
+  below rather than redrawing where it sits. The default 100,000 sat floor
+  lands just under p25, which takes the edge band from 2,387 nodes to 121; a
+  1 M floor empties it entirely and the row and column go `n/a`. That is the
+  finding rather than a fault: the filter removes precisely the class of node
+  the edge band is about. It also makes the bucket nearly free at that floor —
+  periphery→periphery is 49.3% against an unrestricted 49.4% — because every
+  channel still standing is large enough for the allocation not to bind.
+
+## How routability is computed
+
+Routes are found the way a sender finds them: hops that cannot carry the amount
+are dropped first, and the cheapest of what survives wins. A pair counts as
+routable if **any** route survives, so the figure is about whether the network
+can still carry the payment, not whether one particular path happened to hold.
+
+The search runs **backwards from the destination**, because fees accumulate
+towards the sender: the amount that must flow over a hop is what its far end
+needs plus the fee the near end charges to forward it. One such search answers
+for every possible sender at once, which is why senders are not sampled at all —
+every node in a row's band is scored. Only destinations are sampled, 100 per
+band on the page and 30 on the command line.
+
+The destination count is what sets the precision. Reachability is close to
+all-or-nothing per destination — either a node has a channel big enough to be
+paid over or nobody can reach it — so a cell is really an average over
+destinations however many senders each is scored against. Ten destinations
+quantised every cell to a multiple of 10%; a hundred lands within a couple of
+points of where four hundred does. The sample itself is taken at fixed
+fractional positions in the rank-sorted band rather than redrawn each time, so
+dragging the filter slides the sample through the band instead of jumping it
+between unrelated nodes.
+
+**The sender's own first channel is not restricted.** The bucket applies where
+a node *forwards*, and the sender forwards nothing, so on `s → n₁ → n₂ → d` the
+constrained channels are `(n₁,n₂)` and `(n₂,d)`. A pair that are already direct
+peers has no constrained channel at all.
+
+Two caveats specific to this section, both stated on the page. It routes over a
+**strict subset** of the edges the rest of the page counts: a direction is only
+in the routing graph if it gossiped a policy and is not `disabled`, which is
+60,162 of the 96,808 directions the filter reports on. And the 20-hop limit is
+applied by finding the cheapest route and dropping it if it runs long, rather
+than searching for the cheapest route *within* 20 hops — base fees keep cheap
+routes short, so the two should rarely differ.
 
 ## Filtering
 
@@ -167,19 +227,34 @@ All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--min-max-htlc`, `--prices`, `--thresholds`, `--percentiles`,
-`--current-price`, `--percentile-type`);
+`--current-price`, `--percentile-type`, `--payment-usd`, `--route-dests`,
+`--route-seed`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above. It reads the graph dump
 directly rather than `data.js`.
 
+The routability heatmap is the only table that walks the graph, and it is most
+of the run's few seconds; `--no-routability` skips it. Its `--route-dests`
+defaults to 30 against the page's 100, which is what keeps a bare run quick —
+raise it to match the page exactly.
+
 ## Regenerate the data
 
-`data.js` is committed so the page works from a clone. To rebuild it from a
-fresh `lncli describegraph` dump:
+`data.js` and `graph.js` are both committed so the page works from a clone. To
+rebuild them from a fresh `lncli describegraph` dump:
 
 ```
-python3 build_data.py mainnet.json --output data.js
+python3 build_data.py mainnet.json --output data.js --graph-output graph.js
 ```
+
+`data.js` (152 KB) is the per-direction histogram of advertised `max_htlc` that
+drives the first three sections. `graph.js` (1.2 MB, 389 KB gzipped) is the
+topology the routability section routes over, in CSR form — `off[]` indexing
+into `to[]`/`maxHtlc[]`/`baseMsat[]`/`ppm[]`, node indices only, no pubkeys,
+since nothing on the page names a node. It is deliberately a smaller set of
+directions than the histogram, for the reason given above. Every script tag is
+`defer`red, so the topology stays off the parse path without disturbing the
+order the files load in.
 
 ## Tests
 

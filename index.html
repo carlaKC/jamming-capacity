@@ -157,14 +157,84 @@
       <div class="table-wrap" id="pct-wrap"></div>
     </details>
 
+    <details class="result-section" open>
+      <summary class="results-head">General routability</summary>
+      <div class="section-intro">
+        <p>
+	  The tables above ask what a single channel can carry. This one asks
+	  whether a payment gets all the way across. Nodes are banded by their
+	  largest advertised <code>max_htlc</code>, read against the same
+	  percentiles the table above prints: <strong>edge</strong> up to the
+	  25th, <strong>periphery</strong> to the 80th, <strong>core</strong>
+	  above it. Each cell is the share of pairs that can still pay each other
+	  once the general bucket's allocation applies to every channel the
+	  payment is forwarded over.
+        </p>
+        <p>
+	  Routes are found the way a sender finds them: hops that cannot carry
+	  the amount are dropped first, then the cheapest of what is left wins.
+	  A pair counts as routable if any route survives. The sender's own
+	  first channel is not restricted, because the bucket applies where a
+	  node <em>forwards</em> and the sender forwards nothing.
+        </p>
+        <p>
+	  The percentiles are over the <strong>whole</strong> graph, exactly as
+	  above, so the bands sit at fixed sat thresholds and two filter
+	  settings stay comparable. Raising the filter therefore empties a band
+	  from below rather than moving it: the default floor of 100,000 sat
+	  sits just under the 25th percentile, so it takes nearly all of the
+	  edge band with it. That is the finding, not a fault in the table.
+        </p>
+      </div>
+      <div class="tabs" id="route-tabs" role="tablist">
+        <button type="button" class="tab" data-route-tab="generalSlot">Single general slot</button>
+        <button type="button" class="tab active" data-route-tab="general">All general slots</button>
+      </div>
+      <div class="route-controls" id="route-controls"></div>
+      <p class="table-caption" id="route-caption"></p>
+      <div class="table-wrap" id="route-wrap"></div>
+      <h3 class="method-head">What this does not account for</h3>
+      <ul class="caveats">
+        <li>
+          <strong>Only channels that can forward.</strong> A direction is in
+	  this graph only if it gossiped a policy and is not
+	  <code>disabled</code>, which leaves 60,162 of the 96,808 directions
+	  the filter above reports on. So these percentages are shares of a
+	  smaller graph than that one describes.
+          </li>
+        <li>
+          <strong>Direct peers are included.</strong> A pair that already shares
+	  a channel has no forwarding node, so the bucket never applies and it
+	  is close to an automatic success. This flatters the core, which is
+	  directly connected to a great deal of the graph.
+          </li>
+        <li>
+          <strong>The hop limit is applied after the fact.</strong> We find the
+	  cheapest route and drop it if it runs past 20 hops, rather than
+	  searching for the cheapest route within 20 hops. Base fees keep cheap
+	  routes short, so the two should rarely differ.
+          </li>
+        <li>
+          <strong>Advertised liquidity, not actual.</strong> As everywhere on
+	  this page, a channel's <code>max_htlc</code> stands in for its
+	  <code>max_htlc_value_in_flight</code>, and we say nothing about which
+	  side of the channel the balance is on.
+          </li>
+      </ul>
+    </details>
+
   </section>
 </main>
 <footer>
   <p class="provenance" id="provenance"></p>
 </footer>
 <div id="tooltip" class="tooltip hidden"></div>
-<script src="data.js"></script>
-<script src="math.js"></script>
-<script src="app.js"></script>
+<!-- All deferred, which keeps the 1.2 MB of topology off the parse path while
+     preserving execution order: app.js still boots with everything in place. -->
+<script src="data.js" defer></script>
+<script src="graph.js" defer></script>
+<script src="math.js" defer></script>
+<script src="routability.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>
