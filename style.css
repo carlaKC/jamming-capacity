@@ -210,15 +210,17 @@ footer {
   border-top: 1px solid var(--border);
 }
 
-/* Preset dropdown inside a parameter card: match the number inputs beside it
-   rather than the pill-shaped selectors used in table corners. */
+/* Selector inside a parameter card. Fully rounded, like the mode toggles and
+   the table-corner selectors, rather than the softer radius of the number
+   inputs it sits beside. */
 .param-group select {
   font: inherit;
   font-size: 14px;
+  font-weight: 700;
   color: var(--ink);
-  padding: 6px 10px;
+  padding: 6px 14px;
   border: 1.5px solid var(--grid);
-  border-radius: 10px;
+  border-radius: 999px;
   background: var(--surface);
   cursor: pointer;
   transition: border-color 300ms ease, box-shadow 300ms ease;
