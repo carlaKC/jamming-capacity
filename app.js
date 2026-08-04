@@ -193,8 +193,31 @@
   // The bucket's largest single HTLC as a fraction of the edge's max_htlc:
   // general = the whole per-peer liquidity allocation; congestion = one
   // slot's worth.
+  // The largest single HTLC the selected bucket admits, as a fraction of the
+  // edge's max_htlc. "All general slots" is a peer's whole allocation and is
+  // the default; the other two narrow it to one slot's worth.
+  const CELL_MODES = {
+    generalSlot: {
+      frac: (m) => m.generalSlotFrac,
+      caption: "One general slot: we assume the payment occupies a single " +
+        "slot of the general bucket.",
+    },
+    general: {
+      frac: (m) => m.peerGeneralFrac,
+      caption: "All general slots: we assume that the payment is using the " +
+        "full allocation of slots for this bucket.",
+    },
+    congestion: {
+      frac: (m) => m.congestionSlotFrac,
+      caption: "Congestion bucket: we assume that the payment is using a " +
+        "single slot in the congestion bucket.",
+    },
+  };
+
+  const cellMode = () => CELL_MODES[state.tab] || CELL_MODES.general;
+
   function cellFrac(m) {
-    return state.tab === "general" ? m.peerGeneralFrac : m.congestionSlotFrac;
+    return cellMode().frac(m);
   }
 
   function shadeCell(td, share) {
@@ -291,9 +314,7 @@
   }
 
   function renderTable(metrics) {
-    $("table-caption").textContent = (state.tab === "general"
-      ? "General bucket: we assume that the payment is using the full allocation of slots for this bucket."
-      : "Congestion bucket: we assume that the payment is using a single slot in the congestion bucket.") +
+    $("table-caption").textContent = cellMode().caption +
       " Hover a cell for sat values; + adds a threshold row, × removes one.";
 
     const table = el("table");
