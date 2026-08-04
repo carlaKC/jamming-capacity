@@ -115,6 +115,19 @@
       <p class="table-caption" id="table-caption"></p>
       <div class="table-wrap" id="table-wrap"></div>
       <p class="error hidden" id="threshold-error"></p>
+      <h3 class="method-head">What this does not account for</h3>
+      <ul class="caveats">
+        <li>
+          <strong>Unknown max_htlc_value_in_flight.</strong>  This value is not
+	  gossiped. We use <code>max_htlc_msat</code> as a proxy, and where a
+	  direction advertises none we impute 99% of capacity.
+	  </li>
+        <li>
+          <strong>One HTLC in flight.</strong> We assume a single HTLC occupying
+	  the outgoing channel's allocation on its incoming channel, and do not
+	  account for liquidity distribution.
+	  </li>
+      </ul>
     </details>
 
     <details class="result-section" open>
@@ -129,21 +142,6 @@
       <div class="table-wrap" id="pct-wrap"></div>
     </details>
 
-  </section>
-  <section id="caveats">
-    <h3 class="method-head">What this does not account for</h3>
-    <ul class="caveats">
-      <li>
-        <strong>Unknown max_htlc_value_in_flight.</strong>  This value is not
-	gossiped. We use <code>max_htlc_msat</code> as a proxy, and where a
-	direction advertises none we impute 99% of capacity.
-	</li>
-      <li>
-        <strong>One HTLC in flight.</strong> We assume a single HTLC occupying
-	the outgoing channel's allocation on its incoming channel, and do not
-	account for liquidity distribution.
-	</li>
-    </ul>
   </section>
 </main>
 <footer>
