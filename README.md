@@ -15,8 +15,8 @@ it locally: open `index.html` — no build step, no server needed.
 ## What it shows
 
 The page has a **Parameters** row across the top, a **Filtering** section under
-it, and three result sections below that — **Channel statistics**, **Channel
-distribution** and **Channel percentiles** — each collapsible by its heading.
+it, and two result sections below that — **Channel statistics** and **Channel
+distribution** — each collapsible by its heading.
 
 - **Channel statistics**, per `max_accepted_htlcs`: slots per bucket
   (general / congestion / protected), per-peer general slot allocation
@@ -50,12 +50,10 @@ exits non-zero on the command line.
   allocation) or the congestion bucket (one slot's liquidity), across the three
   BTC prices. Hover a cell for sat values. The dollar thresholds are
   the rows, and are edited in place: `+` on the last row adds one (the table
-  re-sorts around it), and hovering a row reveals a `×` to drop it.
-- **Channel percentiles**: the inverse question — what the edge at a
-  given `max_htlc` percentile can actually forward, in dollars, through one
-  general slot, a peer's whole general allocation (k slots), or a congestion
-  slot. The corner cell picks the BTC price and the channel type; hover a cell
-  for sat values.
+  re-sorts around it), and hovering a row reveals a `×` to drop it. Three
+  views sit above the table: a single general slot, a peer's whole general
+  allocation (the default), and one congestion slot. Caveats on how the figures
+  are derived sit under the table.
 
 ## Filtering
 
@@ -114,17 +112,12 @@ at least $X across BTC prices and channel types:
 
 ![HTLC distribution table](htlc_table.png)
 
-The channel percentile table — what each bucket lets the edge at a given
-`max_htlc` percentile forward:
-
-![Channel percentile table](percentile_table.png)
-
 ## Reproduce the numbers on the command line
 
 `analyze_buckets.py` is the headless twin of the page: it runs the same bucket
-math over the same filtered graph and prints the three tables you see in the
-browser — the per-channel-type metrics, the distribution table and the channel
-percentiles. Point it at a `describegraph` dump:
+math over the same filtered graph and prints the same tables you see in the
+browser — the per-channel-type metrics and the distribution table. Point it at
+a `describegraph` dump:
 
 ```
 python3 analyze_buckets.py mainnet.json
@@ -133,8 +126,7 @@ python3 analyze_buckets.py mainnet.json
 All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
-`--alloc-pct`, `--min-max-htlc`, `--prices`, `--thresholds`, `--percentiles`,
-`--percentile-price`, `--percentile-type`);
+`--alloc-pct`, `--min-max-htlc`, `--prices`, `--thresholds`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above. It reads the graph dump
 directly rather than `data.js`.

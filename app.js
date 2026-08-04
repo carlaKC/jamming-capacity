@@ -9,8 +9,7 @@
   const cdfFor = (sat) =>
     sat > 0 ? M.makeCdf(M.filterHist(DATA.hist, sat)) : FULL_CDF;
 
-  const PERCENTILES = [10, 25, 50, 75, 90, 99];
-  const DEFAULT_PCT_PRICE = 75000;
+  const DEFAULT_PRICE = 75000;
   // The cutoff under consideration: below this a channel is too small to
   // forward a payment once any bucket restriction applies to it.
   const DEFAULT_MIN_HTLC_SAT = 100000;
@@ -35,8 +34,6 @@
     prices: [50000, 75000, 100000],
     thresholds: [1, 5, 10, 25, 50, 100, 250, 500],
     tab: "general",
-    pctPrice: DEFAULT_PCT_PRICE,
-    pctType: 483,
   };
 
   // Rebuilt whenever the graph filter moves; every table reads this one. Seeded
@@ -51,23 +48,8 @@
   const fmtInt = (x) => Math.round(x).toLocaleString("en-US");
   const fmtSat = (x) => fmtInt(x) + " sat";
   const fmtUsd = (x) => "$" + x.toLocaleString("en-US");
-  // Money to the cent — percentile cells span $0.66 to $13,200. Rounds to an
-  // integer number of cents first so analyze_buckets.py, which formats the
-  // same doubles in Python, lands on the same cent. Intl and Python's %.2f
-  // disagree on halfway-looking values such as 9.045.
-  const fmtUsdCents = (x) =>
-    "$" + (Math.round(x * 100) / 100).toLocaleString("en-US",
-      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtPct = (frac, digits) =>
     isFinite(frac) ? (frac * 100).toFixed(digits === undefined ? 2 : digits) + "%" : "n/a";
-  // 10 -> "10th", 21 -> "21st", 11 -> "11th".
-  function ordinal(n) {
-    if (!Number.isInteger(n)) return String(n) + "th";
-    const teen = Math.abs(n) % 100;
-    if (teen >= 11 && teen <= 13) return n + "th";
-    return n + (["th", "st", "nd", "rd"][Math.abs(n) % 10] || "th");
-  }
-  const fmtPctile = (p) => ordinal(p) + " percentile";
   const compactUsd = (x) =>
     x >= 1000
       ? (x / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 }) + "k"
@@ -135,22 +117,6 @@
     return [...state.channelTypes].sort((a, b) => b - a).map(typeMetrics);
   }
 
-  // The selected price, falling back to the median configured one when the
-  // selection has been removed from the sidebar list.
-  function pctPrice() {
-    if (state.prices.includes(state.pctPrice)) return state.pctPrice;
-    const sorted = [...state.prices].sort((a, b) => a - b);
-    return sorted[Math.floor((sorted.length - 1) / 2)];
-  }
-
-  // The percentile table shows one channel type at a time: under percentage
-  // slots the three limits scale with max_accepted_htlcs, so there is no
-  // single answer across types. Falls back to the largest active type.
-  function pctType() {
-    if (state.channelTypes.includes(state.pctType)) return state.pctType;
-    return Math.max(...state.channelTypes);
-  }
-
   // ---------------- rendering: metrics comparison table ----------------
 
   const METRIC_ROWS = [
@@ -190,9 +156,6 @@
 
   // ---------------- rendering: distribution table ----------------
 
-  // The bucket's largest single HTLC as a fraction of the edge's max_htlc:
-  // general = the whole per-peer liquidity allocation; congestion = one
-  // slot's worth.
   // The largest single HTLC the selected bucket admits, as a fraction of the
   // edge's max_htlc. "All general slots" is a peer's whole allocation and is
   // the default; the other two narrow it to one slot's worth.
@@ -372,89 +335,6 @@
     tbody.appendChild(thresholdAddRow(metrics.length * prices.length));
     table.appendChild(tbody);
     $("table-wrap").replaceChildren(table);
-  }
-
-  // ---------------- rendering: channel percentile table ----------------
-
-  // Inverse of the distribution table: instead of "what share of edges clear
-  // $X", it asks "what can the edge at percentile P actually forward".
-  const PCT_COLUMNS = [
-    ["One general slot", (m) => m.generalSlotFrac],
-    ["All general slots", (m) => m.peerGeneralFrac],
-    ["Congestion slot", (m) => m.congestionSlotFrac],
-  ];
-
-  // A <select> for the percentile table's corner cell.
-  function cornerSelect(label, values, selected, format, onPick) {
-    const select = el("select", "corner-select");
-    select.setAttribute("aria-label", label);
-    for (const v of values) {
-      const opt = el("option", null, format(v));
-      opt.value = String(v);
-      if (v === selected) opt.selected = true;
-      select.appendChild(opt);
-    }
-    select.addEventListener("change", () => {
-      onPick(Number(select.value));
-      renderPercentiles();
-    });
-    return select;
-  }
-
-  function renderPercentiles() {
-    const price = pctPrice();
-    const type = pctType();
-    const m = typeMetrics(type);
-
-    const table = el("table");
-    const thead = el("thead");
-    const hr = el("tr");
-
-    // Corner cell holds the price and channel-type selectors.
-    const corner = el("th", "row-head");
-    corner.appendChild(cornerSelect(
-      "BTC price for the percentile table",
-      [...state.prices].sort((a, b) => a - b), price,
-      (p) => "@ $" + compactUsd(p) + " / BTC",
-      (p) => { state.pctPrice = p; }));
-    corner.appendChild(cornerSelect(
-      "Channel type for the percentile table",
-      [...state.channelTypes].sort((a, b) => b - a), type,
-      (n) => fmtInt(n) + " slots",
-      (n) => { state.pctType = n; }));
-    hr.appendChild(corner);
-
-    for (const [label] of PCT_COLUMNS) hr.appendChild(el("th", null, label));
-    thead.appendChild(hr);
-    table.appendChild(thead);
-
-    const tbody = el("tbody");
-    for (const p of PERCENTILES) {
-      const base = M.percentileSat(CDF, p);
-      const tr = el("tr");
-      tr.appendChild(el("th", "row-head", fmtPctile(p)));
-      for (const [label, pick] of PCT_COLUMNS) {
-        const frac = pick(m);
-        const td = el("td");
-        if (!(frac > 0) || !isFinite(base)) {
-          td.textContent = "n/a";
-          td.classList.add("na");
-        } else {
-          const sat = base * frac;
-          td.textContent = fmtUsdCents(M.satToUsd(sat, price));
-          td.dataset.pctile = String(p);
-          td.dataset.bucket = label;
-          td.dataset.base = String(base);
-          td.dataset.sat = String(sat);
-          td.dataset.frac = String(frac);
-          td.dataset.price = String(price);
-        }
-        tr.appendChild(td);
-      }
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
-    $("pct-wrap").replaceChildren(table);
   }
 
   // ---------------- rendering: graph filter ----------------
@@ -728,7 +608,6 @@
     renderFilter();
     renderMetrics(metrics);
     renderTable(metrics);
-    renderPercentiles();
   }
 
   function setMinHtlc(sat) {
@@ -768,8 +647,8 @@
     $("filter-default-note").textContent =
       "We set this value to a default of " + fmtInt(DEFAULT_MIN_HTLC_SAT) +
       " sat, which is around " +
-      fmtUsd(Math.round(M.satToUsd(DEFAULT_MIN_HTLC_SAT, DEFAULT_PCT_PRICE))) +
-      " at " + fmtUsd(DEFAULT_PCT_PRICE) + " / BTC, as this is the cutoff " +
+      fmtUsd(Math.round(M.satToUsd(DEFAULT_MIN_HTLC_SAT, DEFAULT_PRICE))) +
+      " at " + fmtUsd(DEFAULT_PRICE) + " / BTC, as this is the cutoff " +
       "we're considering.";
 
     const sel = $("min-htlc");
@@ -993,22 +872,6 @@
     placeTooltip(x, y);
   }
 
-  function showPctTooltip(td, x, y) {
-    const d = td.dataset;
-    const base = Number(d.base);
-    const sat = Number(d.sat);
-    const price = Number(d.price);
-    tooltip.replaceChildren(
-      el("div", "tt-value", fmtSat(Math.floor(sat))),
-      el("div", "tt-line", d.bucket.toLowerCase() + " — " +
-        fmtPct(Number(d.frac)) + " of max_htlc"),
-      el("div", "tt-line",
-        fmtPctile(Number(d.pctile)) + " edge advertises " + fmtSat(base)),
-      el("div", "tt-line", "at $" + price.toLocaleString("en-US") + " / BTC"),
-    );
-    placeTooltip(x, y);
-  }
-
   function bindTooltip(wrapId, selector, show) {
     $(wrapId).addEventListener("pointermove", (e) => {
       const td = e.target.closest(selector);
@@ -1019,7 +882,6 @@
   }
 
   bindTooltip("table-wrap", "td[data-price]", showTooltip);
-  bindTooltip("pct-wrap", "td[data-sat]", showPctTooltip);
 
   // ---------------- boot ----------------
 

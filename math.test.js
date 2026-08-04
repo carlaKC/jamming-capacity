@@ -116,18 +116,4 @@ eq(M.histogramBuckets([[1e12, 1]], 2, 3)[5].count, 1, "over-range clamps to last
 eq(M.histogramBuckets([[0, 9]], 2, 3).reduce((a, b) => a + b.count, 0), 0,
   "zero-sat entries have no log position and are skipped");
 
-// --- percentileSat: nearest rank over the same histogram.
-// [[100,3],[200,5],[300,2]] -> 100 100 100 200 200 200 200 200 300 300
-const pcdf = M.makeCdf([[100, 3], [200, 5], [300, 2]]);
-eq(M.percentileSat(pcdf, 0), 100, "p0 -> smallest");
-eq(M.percentileSat(pcdf, 10), 100, "p10 -> 1st value");
-eq(M.percentileSat(pcdf, 30), 100, "p30 -> 3rd value, still the minimum");
-eq(M.percentileSat(pcdf, 31), 200, "p31 -> 4th value");
-eq(M.percentileSat(pcdf, 50), 200, "p50 -> 5th value");
-eq(M.percentileSat(pcdf, 80), 200, "p80 -> 8th value");
-eq(M.percentileSat(pcdf, 81), 300, "p81 -> 9th value");
-eq(M.percentileSat(pcdf, 100), 300, "p100 -> largest");
-eq(M.percentileSat(M.makeCdf([[42, 7]]), 50), 42, "one distinct value -> that value");
-ok(Number.isNaN(M.percentileSat(M.makeCdf([]), 50)), "empty hist -> NaN");
-
 console.log(`math.test.js: ${passed} assertions passed`);
