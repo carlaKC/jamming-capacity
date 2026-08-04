@@ -2,9 +2,9 @@
 """Preprocess an `lncli describegraph` dump into data.js for the explorer.
 
 One dataset comes out of a pass over the graph: the per-direction histogram of
-advertised max_htlc, which drives every table on the page. A direction is kept
-when the advertising node has more than one channel (single-channel nodes are
-assumed to be non-forwarding).
+advertised max_htlc, which drives every table on the page. Every direction that
+advertises a usable max_htlc is kept -- the page's Filtering control is the only
+thing that excludes an edge, so what it reports as dropped is the whole story.
 
 About a fifth of directions advertise no max_htlc. Rather than drop them --
 which would bias the histogram towards well-configured nodes -- we impute
@@ -37,27 +37,16 @@ def _int(value):
         return 0
 
 
-def channel_counts(edges):
-    counts = Counter()
-    for edge in edges:
-        counts[edge.get("node1_pub")] += 1
-        counts[edge.get("node2_pub")] += 1
-    return counts
-
-
 def parse_graph(graph):
     """Return (hist_values, stats).
 
     hist_values are the kept per-direction max_htlc sats.
     """
     edges = graph.get("edges", [])
-    counts = channel_counts(edges)
-
     kept, dropped, imputed = [], 0, 0
     for edge in edges:
         capacity = _int(edge.get("capacity"))
-        for node_key, _peer_key, policy_key in DIRECTIONS:
-            node = edge.get(node_key)
+        for _node_key, _peer_key, policy_key in DIRECTIONS:
             policy = edge.get(policy_key)
             sat = _int(policy.get("max_htlc_msat")) // 1000 if policy else 0
             if sat <= 0:
@@ -67,21 +56,13 @@ def parse_graph(graph):
                 if sat > 0:
                     imputed += 1
             if sat <= 0:
+                # No advertised limit and no capacity to impute from: there is
+                # no value to put in the histogram at all.
                 dropped += 1
                 continue
+            kept.append(sat)
 
-            # The histogram is about who could forward, so single-channel
-            # nodes stay out of it.
-            if counts[node] > 1:
-                kept.append(sat)
-            else:
-                dropped += 1
-
-    stats = {
-        "dropped": dropped,
-        "imputed": imputed,
-        "single": sum(1 for c in counts.values() if c == 1),
-    }
+    stats = {"dropped": dropped, "imputed": imputed}
     return kept, stats
 
 
@@ -93,7 +74,6 @@ def render_data_js(kept, stats, source):
         "directionsKept": len(kept),
         "directionsDropped": stats["dropped"],
         "directionsImputed": stats["imputed"],
-        "singleChannelNodes": stats["single"],
         "hist": [[s, c] for s, c in hist],
     }
     return "window.EDGE_DATA = %s;\n" % json.dumps(payload, separators=(",", ":"))
@@ -101,9 +81,8 @@ def render_data_js(kept, stats, source):
 
 FIXTURE = {
     "edges": [
-        # A is a hub (four channels); B, C, D, E hang off it. B and E are
-        # single-channel, so their advertised directions stay out of the
-        # histogram.
+        # A is a hub (four channels); B, C, D, E hang off it. Every advertising
+        # direction is kept now, however few channels its node has.
         {"node1_pub": "A", "node2_pub": "B", "capacity": "1000000",
          "node1_policy": {"max_htlc_msat": "1500000"},
          "node2_policy": {"max_htlc_msat": "2000000"}},
@@ -128,18 +107,20 @@ def self_test():
     # Imputed: C->A (no policy) and A->D (zero max_htlc). E->A has no capacity
     # to fall back on, and A->E floors to zero sat.
     assert stats["imputed"] == 2, stats
-    assert stats["single"] == 2, stats            # B and E
-    # Only multi-channel advertisers land in the histogram, so B->A's 2000 sat
-    # stays out: A->B, A->C, A->D, C->A, C->D, D->C, D->A.
-    assert sorted(kept) == [800, 900, 1500, 1500, 3000, 990000,
+    # Every advertising direction lands in the histogram, including B->A's
+    # 2000 sat: B has one channel, which no longer keeps it out.
+    assert sorted(kept) == [800, 900, 1500, 1500, 2000, 3000, 990000,
                             3960000], sorted(kept)
-    assert stats["dropped"] == 3, stats           # A->E, E->A, B->A
+    # The only drops left are directions with no advertised limit and no
+    # capacity to impute one from: A->E floors to zero sat, E->A has neither.
+    assert stats["dropped"] == 2, stats
 
     js = render_data_js(kept, stats, "path/to/f.json")
     assert js.startswith("window.EDGE_DATA = {") and js.endswith(";\n"), js[:40]
     payload = json.loads(js[len("window.EDGE_DATA = "):-2])
-    assert payload["hist"] == [[800, 1], [900, 1], [1500, 2], [3000, 1],
-                               [990000, 1], [3960000, 1]], payload["hist"]
+    assert payload["hist"] == [[800, 1], [900, 1], [1500, 2], [2000, 1],
+                               [3000, 1], [990000, 1],
+                               [3960000, 1]], payload["hist"]
     assert payload["source"] == "f.json"
     assert payload["hist"] == sorted(payload["hist"]), payload["hist"]
     print("build_data.py self-test: OK")
@@ -167,8 +148,8 @@ def main(argv=None):
         print("no usable directed policies found", file=sys.stderr)
         return 1
     print(f"kept {len(kept):,} directions ({len(set(kept)):,} distinct values), "
-          f"dropped {stats['dropped']:,}, imputed {stats['imputed']:,}, "
-          f"single-channel nodes {stats['single']:,}")
+          f"dropped {stats['dropped']:,} (no max_htlc and no capacity), "
+          f"imputed {stats['imputed']:,}")
 
     with open(args.output, "w") as fh:
         fh.write(render_data_js(kept, stats, args.graph))

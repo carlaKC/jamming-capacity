@@ -13,8 +13,9 @@ two tables it prints match what the page renders.
      the BTC prices and dollar thresholds you configure.
 
 Base value `B` per direction is the advertised `max_htlc_msat` (the observable
-lower bound on `max_htlc_value_in_flight_msat`), kept only when the advertising
-node forwards on more than one channel — identical to the page's data set.
+lower bound on `max_htlc_value_in_flight_msat`). Every advertising direction is
+kept — --min-max-htlc is the only thing that excludes one, identical to the
+page's Filtering control.
 
 See PR: https://github.com/lightning/bolts/pull/1280
 """
@@ -453,8 +454,7 @@ def analyze(graph, cfg, source, csv_path=None):
     print("=" * 78)
     print("BOLT #1280 local resource conservation — mainnet bucket analysis")
     print("=" * 78)
-    print(f"Data: {os.path.basename(source)} — {len(kept):,} directed edges kept, "
-          f"{stats['dropped']:,} dropped (single-channel node), "
+    print(f"Data: {os.path.basename(source)} — {len(kept):,} directed edges, "
           f"{stats['imputed']:,} with max_htlc imputed from capacity.")
     if cfg["min_max_htlc"] > 0:
         removed = len(kept) - int(cdf.total)
@@ -462,7 +462,7 @@ def analyze(graph, cfg, source, csv_path=None):
         kept_value = hist_value_total(hist)
         dropped_value = full_value - kept_value
         print(f"Graph filter: max_htlc >= {cfg['min_max_htlc']:,} sat — "
-              f"{removed:,} more edges dropped "
+              f"{removed:,} edges dropped "
               f"({removed / len(kept) * 100:.1f}% of edges, "
               f"{dropped_value / full_value * 100:.2f}% of advertised "
               f"liquidity), {int(cdf.total):,} left. Every figure below is a "

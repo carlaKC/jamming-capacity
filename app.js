@@ -1137,10 +1137,11 @@
 
   // ---------------- boot ----------------
 
+  // Every advertising direction is in the data set; the Filtering control is
+  // the only thing that takes any of them out of view.
   $("provenance").textContent =
     "Data: " + DATA.source + " (" + DATA.generated + ") — " +
-    fmtInt(DATA.directionsKept) + " directed edges kept, " +
-    fmtInt(DATA.directionsDropped) + " dropped (single-channel node), " +
+    fmtInt(DATA.directionsKept) + " directed edges, " +
     fmtInt(DATA.directionsImputed) + " with max_htlc imputed from capacity.";
 
   mountFilterControl();

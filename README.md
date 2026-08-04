@@ -75,8 +75,8 @@ exits non-zero on the command line.
   in Parameters, which the corner cell states; under percentage slots the
   corner also picks the channel type. Hover a cell for sat values, or a row's
   percentile label for how much of the network's advertised liquidity sits at
-  or below that percentile — the smaller half of edges hold 2.4% of it, and the
-  top 1% hold a third, which is the same count-versus-value gap the filter
+  or below that percentile — the smaller half of edges hold about 2% of it, and
+  the top 1% hold a third, which is the same count-versus-value gap the filter
   reports.
 
   Percentiles are taken over the **whole** graph rather than the filtered set,
@@ -102,10 +102,10 @@ cutoff under consideration. A fresh page is therefore already filtered.
 
 Beside the dropdown, the section states what the current floor removes, as both
 a share of edges and a share of advertised liquidity. The two are worth reading
-together: at the default floor they are 20.2% and 0.09%. A fifth of the graph's
-directed edges advertise under 100,000 sat, and between them they hold about a
-thousandth of its advertised liquidity — which is the case for setting them
-aside.
+together: at the default floor they are 23.8% and 0.12%. Nearly a quarter of the
+graph's directed edges advertise under 100,000 sat, and between them they hold
+about a thousandth of its advertised liquidity — which is the case for setting
+them aside.
 
 Below the control sits a histogram of advertised `max_htlc` across all directed
 edges, four bars per power of ten from 1 sat to 1 G sat. Filtered bars grey out.
@@ -132,9 +132,14 @@ The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction
 advertises none (about a fifth of them), 99% of channel capacity stands in: the
 median advertising direction sets exactly that, and dropping them would bias the
-histogram towards well-configured nodes. Directed policies enter the histogram
-only when the advertising node has more than one channel (single-channel nodes
-are assumed to be non-forwarding).
+histogram towards well-configured nodes.
+
+Every advertising direction enters the histogram, whatever its node's degree:
+the Filtering control is the only thing that excludes an edge, so the share it
+reports is the whole of what has been set aside. Earlier revisions also dropped
+directions advertised by single-channel nodes, on the grounds that a node with
+one channel cannot forward; that removed 9,261 of 96,808 directions before any
+of the page's own controls saw them.
 
 ## Screenshots
 
