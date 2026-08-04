@@ -80,6 +80,31 @@ eq(M.shareAtOrAbove(cdf, 401), 0, "nothing qualifies");
 eq(M.shareAtOrAbove(cdf, Infinity), 0, "Infinity -> 0");
 eq(M.shareAtOrAbove(M.makeCdf([]), 100), 0, "empty hist -> 0");
 
+// --- filterHist: the graph filter drops whole entries, it does not reweight.
+const fhist = [[100, 1], [200, 2], [400, 1]];
+eq(M.filterHist(fhist, 0), fhist, "no floor -> the same array");
+eq(M.filterHist(fhist, -5), fhist, "negative floor -> the same array");
+eq(M.filterHist(fhist, 200).length, 2, "floor at 200 keeps 200 and 400");
+eq(M.makeCdf(M.filterHist(fhist, 200)).total, 3, "and 3 of the 4 edges");
+eq(M.filterHist(fhist, 100).length, 3, "floor is inclusive");
+eq(M.filterHist(fhist, 401).length, 0, "floor above everything empties it");
+// A filtered CDF renormalises: the survivors are the whole population now.
+eq(M.shareAtOrAbove(M.makeCdf(M.filterHist(fhist, 200)), 400), 1 / 3,
+  "share is over survivors, not the original total");
+
+// --- histogramBuckets: log-spaced bars that tile the axis exactly.
+const buckets = M.histogramBuckets([[1, 5], [10, 3], [15, 2], [50, 4], [999, 7]], 2, 3);
+eq(buckets.length, 6, "2 per decade x 3 decades");
+eq(buckets[0].count, 5, "1 sat lands in the first bucket");
+eq(buckets[2].lo, 10, "bucket 2 starts at 10^(2/2)");
+eq(buckets[2].count, 5, "10 and 15 sat share the lower half-decade [10, 31.6)");
+eq(buckets[3].count, 4, "50 sat is the upper half-decade [31.6, 100)");
+eq(buckets[5].count, 7, "999 sat lands in the last bucket");
+approx(buckets[0].hi, buckets[1].lo, 1e-9, "buckets tile without a gap");
+eq(M.histogramBuckets([[1e12, 1]], 2, 3)[5].count, 1, "over-range clamps to last");
+eq(M.histogramBuckets([[0, 9]], 2, 3).reduce((a, b) => a + b.count, 0), 0,
+  "zero-sat entries have no log position and are skipped");
+
 // --- percentileSat: nearest rank over the same histogram.
 // [[100,3],[200,5],[300,2]] -> 100 100 100 200 200 200 200 200 300 300
 const pcdf = M.makeCdf([[100, 3], [200, 5], [300, 2]]);

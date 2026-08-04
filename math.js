@@ -141,6 +141,37 @@
     return { sats, suffix, total: suffix[0] };
   }
 
+  // Drop histogram entries below minSat. The page's filter treats those edges
+  // as absent from the graph, so every table downstream reads a CDF built from
+  // what survives here rather than reweighting the full one.
+  function filterHist(hist, minSat) {
+    if (!(minSat > 0)) return hist;
+    return hist.filter((entry) => entry[0] >= minSat);
+  }
+
+  // Log-spaced buckets for the edge histogram: `perDecade` bars per power of
+  // ten, covering 1 sat up to 10^decades. Bucket i spans
+  // [10^(i/perDecade), 10^((i+1)/perDecade)), so the bars tile the log axis
+  // exactly and a filter threshold can cut one of them in half.
+  function histogramBuckets(hist, perDecade, decades) {
+    const n = perDecade * decades;
+    const counts = new Float64Array(n);
+    for (const [sat, count] of hist) {
+      if (!(sat > 0)) continue;
+      const i = Math.min(n - 1, Math.floor(Math.log10(sat) * perDecade));
+      counts[i] += count;
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      out.push({
+        lo: Math.pow(10, i / perDecade),
+        hi: Math.pow(10, (i + 1) / perDecade),
+        count: counts[i],
+      });
+    }
+    return out;
+  }
+
   // Index of the first entry with value >= requiredSat.
   function lowerBound(cdf, requiredSat) {
     let lo = 0;
@@ -192,6 +223,8 @@
     satToUsd,
     requiredBaseSat,
     makeCdf,
+    filterHist,
+    histogramBuckets,
     shareAtOrAbove,
     percentileSat,
   };

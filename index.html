@@ -63,6 +63,32 @@
     </section>
   </div>
 </section>
+<section id="filtering">
+  <h2 class="results-head">Filtering</h2>
+  <div class="filter-row">
+    <label class="filter-control">
+      <span class="filter-control-label">Minimum <code>max_htlc</code></span>
+      <select id="min-htlc" aria-label="Minimum max_htlc to keep a channel"></select>
+    </label>
+    <div class="filter-explainer">
+      <p>
+        Directions advertising less than this are treated as absent from the
+        graph: every table below is recomputed over the channels that survive,
+        and the percentages are shares of what is left rather than of the whole
+        network. Use it to ask what the proposal looks like once the smallest
+        channels &mdash; the ones that cannot carry a useful payment through
+        any bucket &mdash; are set aside.
+      </p>
+      <p class="filter-share" id="filter-share"></p>
+    </div>
+  </div>
+  <div class="chart-card" id="filter-hist"></div>
+  <p class="table-caption">
+    Advertised <code>max_htlc</code> across the graph's directed edges, four
+    bars per power of ten. Greyed bars are filtered out; the marked bar is cut
+    at the threshold, since a bar spans a range of values.
+  </p>
+</section>
 <main>
   <section id="results">
     <details class="result-section" open>

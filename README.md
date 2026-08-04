@@ -14,9 +14,9 @@ it locally: open `index.html` — no build step, no server needed.
 
 ## What it shows
 
-The page has a **Parameters** row across the top and three result sections
-below it — **Channel statistics**, **Channel distribution** and **Channel
-percentiles** — each collapsible by its heading.
+The page has a **Parameters** row across the top, a **Filtering** section under
+it, and three result sections below that — **Channel statistics**, **Channel
+distribution** and **Channel percentiles** — each collapsible by its heading.
 
 - **Channel statistics**, per `max_accepted_htlcs`: slots per bucket
   (general / congestion / protected), per-peer general slot allocation
@@ -57,6 +57,26 @@ exits non-zero on the command line.
   slot. The corner cell picks the BTC price and the channel type; hover a cell
   for sat values.
 
+## Filtering
+
+The **Filtering** section sets a floor on advertised `max_htlc`: directions
+below it are treated as absent from the graph, not down-weighted. Every table
+underneath is recomputed over the survivors, so its percentages are shares of
+what is left rather than of the whole network. It answers what the proposal
+looks like once the smallest channels — the ones that cannot carry a useful
+payment through any bucket — are set aside.
+
+Beside the dropdown, the section states how much of the graph the current floor
+removes. Below it, a histogram of advertised `max_htlc` across all directed
+edges, four bars per power of ten from 1 sat to 1 G sat. Filtered bars grey out.
+Because a bar covers a range of values, a floor landing inside one cuts that bar
+in two rather than colouring the whole thing by which side its edge falls on; a
+rule marks the cut.
+
+The offered floors run from 1 k to 10 M sat. The largest still leaves about an
+eighth of the edges in view, so no choice can empty the tables. On the command
+line the same control is `--min-max-htlc SAT`.
+
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction
 advertises none (about a fifth of them), 99% of channel capacity stands in: the
@@ -95,7 +115,7 @@ python3 analyze_buckets.py mainnet.json
 All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
-`--alloc-pct`, `--prices`, `--thresholds`, `--percentiles`,
+`--alloc-pct`, `--min-max-htlc`, `--prices`, `--thresholds`, `--percentiles`,
 `--percentile-price`, `--percentile-type`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above. It reads the graph dump

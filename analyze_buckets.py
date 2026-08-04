@@ -189,6 +189,17 @@ def make_cdf(hist):
     return Cdf(sats, suffix, (suffix[0] if n else 0))
 
 
+def filter_hist(hist, min_sat):
+    """Drop entries below min_sat, mirroring math.js's filterHist.
+
+    The page's graph filter treats those edges as absent rather than
+    down-weighted, so every figure downstream is a share of the survivors.
+    """
+    if not (min_sat > 0):
+        return hist
+    return [(sat, count) for sat, count in hist if sat >= min_sat]
+
+
 def share_at_or_above(cdf, required_sat):
     """Share of edges (0..1) whose value is >= required_sat."""
     if cdf.total == 0 or required_sat == math.inf:
@@ -398,8 +409,13 @@ def analyze(graph, cfg, source, csv_path=None):
         print("no usable directed policies found", file=sys.stderr)
         return 1
 
-    hist = sorted(Counter(kept).items())
+    full_hist = sorted(Counter(kept).items())
+    hist = filter_hist(full_hist, cfg["min_max_htlc"])
     cdf = make_cdf(hist)
+    if not hist:
+        print(f"--min-max-htlc {cfg['min_max_htlc']} filtered out every edge",
+              file=sys.stderr)
+        return 1
 
     metrics = [type_metrics(n, cfg)
                for n in sorted(cfg["channel_types"], reverse=True)]
@@ -410,6 +426,12 @@ def analyze(graph, cfg, source, csv_path=None):
     print(f"Data: {os.path.basename(source)} — {len(kept):,} directed edges kept, "
           f"{stats['dropped']:,} dropped (single-channel node), "
           f"{stats['imputed']:,} with max_htlc imputed from capacity.")
+    if cfg["min_max_htlc"] > 0:
+        removed = len(kept) - int(cdf.total)
+        print(f"Graph filter: max_htlc >= {cfg['min_max_htlc']:,} sat — "
+              f"{removed:,} more edges dropped "
+              f"({removed / len(kept) * 100:.1f}% of the graph), "
+              f"{int(cdf.total):,} left. Every figure below is a share of those.")
     print(f"Bucket liquidity split: general {cfg['general_pct']}%, "
           f"congestion {cfg['congestion_pct']}%, "
           f"protected {100 - cfg['general_pct'] - cfg['congestion_pct']}% "
@@ -512,6 +534,16 @@ def self_test():
     assert share_at_or_above(cdf, 200) == 0.7                       # 7 of 10
     assert share_at_or_above(cdf, 250) == 0.2                       # 2 of 10
     assert share_at_or_above(cdf, math.inf) == 0.0
+    # The graph filter drops whole entries; the survivors renormalise.
+    fhist = [(100, 1), (200, 2), (400, 1)]
+    assert filter_hist(fhist, 0) is fhist
+    assert filter_hist(fhist, -1) is fhist
+    assert filter_hist(fhist, 100) == fhist                # inclusive
+    assert filter_hist(fhist, 200) == [(200, 2), (400, 1)]
+    assert filter_hist(fhist, 401) == []
+    assert make_cdf(filter_hist(fhist, 200)).total == 3
+    assert abs(share_at_or_above(make_cdf(filter_hist(fhist, 200)), 400)
+               - 1 / 3) < 1e-12
     # Nearest-rank percentiles over 100 100 100 200 200 200 200 200 300 300.
     assert percentile_sat(cdf, 0) == 100
     assert percentile_sat(cdf, 30) == 100
@@ -573,6 +605,10 @@ def main(argv=None):
     parser.add_argument("--congestion-slots", type=int, default=10, metavar="N",
                         help="congestion bucket slot count "
                              "(--slot-mode fixed; default: 10)")
+    parser.add_argument("--min-max-htlc", type=int, default=0, metavar="SAT",
+                        help="drop directions advertising less than this many "
+                             "sats, as the page's Filtering section does "
+                             "(default: 0, keep the whole graph)")
     parser.add_argument("--min-slots", type=int, default=5, metavar="N",
                         help="per-peer general slot floor (default: 5)")
     parser.add_argument("--alloc-pct", type=float, default=5, metavar="P",
@@ -617,6 +653,9 @@ def main(argv=None):
                 f"{', '.join(str(n) for n in offenders)} can hold; lower the "
                 f"counts or drop {'those types' if len(offenders) > 1 else 'that type'}")
 
+    if args.min_max_htlc < 0:
+        parser.error("--min-max-htlc must be >= 0")
+
     percentile_type = args.percentile_type
     if percentile_type is None:
         percentile_type = max(args.channel_types)
@@ -626,6 +665,7 @@ def main(argv=None):
 
     cfg = {
         "channel_types": args.channel_types,
+        "min_max_htlc": args.min_max_htlc,
         "general_pct": args.general_pct,
         "congestion_pct": args.congestion_pct,
         "slot_mode": args.slot_mode,

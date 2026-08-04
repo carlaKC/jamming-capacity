@@ -5,7 +5,9 @@
 
   const M = window.BucketMath;
   const DATA = window.EDGE_DATA;
-  const CDF = M.makeCdf(DATA.hist);
+  const FULL_CDF = M.makeCdf(DATA.hist);
+  // Rebuilt whenever the graph filter moves; every table reads this one.
+  let CDF = FULL_CDF;
 
   const PERCENTILES = [10, 25, 50, 75, 90, 99];
   const DEFAULT_PCT_PRICE = 75000;
@@ -16,6 +18,8 @@
     // Slots hard-set to fixed counts by default; "pct" splits them by
     // percentage of max_accepted_htlcs instead.
     slotMode: "fixed",
+    // Advertised max_htlc floor, in sats. 0 keeps the whole graph.
+    minHtlcSat: 0,
     generalSlotPct: 40,
     congestionSlotPct: 20,
     generalSlots: 30,
@@ -66,6 +70,26 @@
     if (className) node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
+  }
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function svg(tag, attrs, text) {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const key in attrs) node.setAttribute(key, attrs[key]);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  // 1, 10k, 1M, 1G — the histogram axis has ten decades to label and no room
+  // for grouped digits.
+  function compactSat(sat) {
+    const units = [[1e9, "G"], [1e6, "M"], [1e3, "k"]];
+    for (const [size, suffix] of units) {
+      if (sat >= size) {
+        return (Math.round((sat / size) * 10) / 10).toLocaleString("en-US") + suffix;
+      }
+    }
+    return String(Math.round(sat));
   }
 
   // ---------------- derived metrics ----------------
@@ -404,11 +428,138 @@
     $("pct-wrap").replaceChildren(table);
   }
 
+  // ---------------- rendering: graph filter ----------------
+
+  // Round sat floors spanning the range where the graph's mass actually sits.
+  // 0 is "keep everything"; the largest still leaves about an eighth of the
+  // edges, so no choice can empty the tables below.
+  const HTLC_FLOORS = [0, 1e3, 1e4, 5e4, 1e5, 5e5, 1e6, 5e6, 1e7];
+
+  // Four bars per power of ten, from 1 sat to 1 G sat — the observed range is
+  // 1 sat to 990 M.
+  const HIST_PER_DECADE = 4;
+  const HIST_DECADES = 9;
+  const HIST_BUCKETS = M.histogramBuckets(DATA.hist, HIST_PER_DECADE, HIST_DECADES);
+  const HIST_MAX = HIST_BUCKETS.reduce((a, b) => Math.max(a, b.count), 0);
+
+  const GW = 720, GH = 210;
+  const GPAD = { top: 12, right: 14, bottom: 34, left: 54 };
+  const GPW = GW - GPAD.left - GPAD.right;
+  const GPH = GH - GPAD.top - GPAD.bottom;
+
+  // Bars tile the log axis, so a bar's left and right edges are the log
+  // positions of the sat range it covers.
+  const gx = (sat) => GPAD.left + (Math.log10(sat) / HIST_DECADES) * GPW;
+  const gy = (count) => GPAD.top + (1 - (HIST_MAX ? count / HIST_MAX : 0)) * GPH;
+
+  function renderHistogram() {
+    const floor = state.minHtlcSat;
+    const node = svg("svg", {
+      viewBox: "0 0 " + GW + " " + GH,
+      class: "filter-hist",
+      role: "img",
+      "aria-label":
+        "Histogram of advertised max_htlc across the graph's directed edges, " +
+        "on a log scale from 1 satoshi to 1 billion. " +
+        (floor > 0
+          ? "Bars below the " + compactSat(floor) +
+            " satoshi filter are greyed out."
+          : "No filter is applied, so every bar is included."),
+    });
+
+    for (let i = 0; i <= 4; i++) {
+      const y = GPAD.top + (i / 4) * GPH;
+      node.appendChild(svg("line", {
+        x1: GPAD.left, y1: y, x2: GPAD.left + GPW, y2: y,
+        stroke: "#DED8CF", "stroke-width": 1,
+      }));
+      node.appendChild(svg("text", {
+        x: GPAD.left - 10, y: y + 4, "text-anchor": "end", class: "chart-tick",
+      }, fmtInt((HIST_MAX * (4 - i)) / 4)));
+    }
+
+    for (const b of HIST_BUCKETS) {
+      if (!(b.count > 0)) continue;
+      const x0 = gx(b.lo);
+      const x1 = gx(b.hi);
+      const y = gy(b.count);
+      const h = GPAD.top + GPH - y;
+      // A bar covers a range of values, so a floor inside that range keeps
+      // part of it. Cut the rectangle at the floor rather than colouring the
+      // whole bar by which side its edge falls on.
+      const cut = Math.min(x1, Math.max(x0, gx(Math.max(1, floor))));
+      const seg = (a, w, cls) => {
+        if (w <= 0.05) return;
+        const rect = svg("rect", { x: a, y, width: w, height: h, class: cls });
+        node.appendChild(rect);
+      };
+      if (floor > 0) seg(x0, cut - x0, "hist-bar hist-bar-out");
+      seg(floor > 0 ? cut : x0, x1 - (floor > 0 ? cut : x0), "hist-bar");
+    }
+
+    if (floor > 0) {
+      const x = gx(floor);
+      node.appendChild(svg("line", {
+        x1: x, y1: GPAD.top - 2, x2: x, y2: GPAD.top + GPH,
+        stroke: "#A85448", "stroke-width": 1.5,
+      }));
+      node.appendChild(svg("text", {
+        x: Math.min(x + 6, GPAD.left + GPW - 4), y: GPAD.top + 8,
+        class: "chart-label", fill: "#A85448",
+      }, compactSat(floor) + " sat"));
+    }
+
+    for (let d = 0; d <= HIST_DECADES; d++) {
+      node.appendChild(svg("text", {
+        x: gx(Math.pow(10, d)), y: GH - GPAD.bottom + 20,
+        "text-anchor": "middle", class: "chart-tick",
+      }, compactSat(Math.pow(10, d))));
+    }
+    node.appendChild(svg("text", {
+      x: GPAD.left + GPW / 2, y: GH - 4, "text-anchor": "middle",
+      class: "chart-axis-title",
+    }, "advertised max_htlc, sat (log scale)"));
+
+    return node;
+  }
+
+  function renderFilter() {
+    const kept = CDF.total;
+    const total = FULL_CDF.total;
+    const removed = total - kept;
+    const share = total > 0 ? removed / total : 0;
+    $("filter-share").textContent = state.minHtlcSat > 0
+      ? "Filtering " + fmtPct(share, 1) + " of the graph — " + fmtInt(removed) +
+        " of " + fmtInt(total) + " directed edges dropped, " + fmtInt(kept) +
+        " left."
+      : "No filter: all " + fmtInt(total) + " directed edges are in view.";
+    $("filter-hist").replaceChildren(renderHistogram());
+  }
+
   function renderAll() {
     const metrics = activeMetrics();
+    renderFilter();
     renderMetrics(metrics);
     renderTable(metrics);
     renderPercentiles();
+  }
+
+  function setMinHtlc(sat) {
+    state.minHtlcSat = sat;
+    CDF = sat > 0 ? M.makeCdf(M.filterHist(DATA.hist, sat)) : FULL_CDF;
+    renderAll();
+  }
+
+  function mountFilterControl() {
+    const sel = $("min-htlc");
+    for (const sat of HTLC_FLOORS) {
+      const opt = el("option", null,
+        sat > 0 ? "≥ " + compactSat(sat) + " sat" : "No filter");
+      opt.value = String(sat);
+      if (sat === state.minHtlcSat) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener("change", () => setMinHtlc(Number(sel.value)));
   }
 
   // ---------------- validation helpers ----------------
@@ -658,6 +809,7 @@
     fmtInt(DATA.directionsDropped) + " dropped (single-channel node), " +
     fmtInt(DATA.directionsImputed) + " with max_htlc imputed from capacity.";
 
+  mountFilterControl();
   syncSlotModeUi();
   renderAll();
 })();

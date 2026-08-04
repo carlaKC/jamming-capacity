@@ -112,6 +112,87 @@ h1 {
    rather than letting space-between push it to the far edge. */
 .param-row label { max-width: 300px; }
 
+#filtering {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 4px 24px 0;
+}
+/* The control is a fixed-width column; the explainer takes the rest, so the
+   prose keeps a readable measure instead of stretching the full 1200px. */
+.filter-row {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+@media (max-width: 900px) { .filter-row { grid-template-columns: 1fr; } }
+.filter-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.filter-control select {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  width: 100%;
+  color: var(--ink);
+  padding: 8px 12px;
+  border: 1.5px solid var(--grid);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 300ms ease, box-shadow 300ms ease;
+}
+.filter-control select:hover { border-color: var(--clay); }
+.filter-control select:focus-visible {
+  outline: none;
+  border-color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(93, 112, 82, 0.25);
+}
+.filter-explainer { font-size: 14px; line-height: 1.7; color: var(--ink-2); }
+.filter-explainer p { margin: 0 0 8px; }
+/* The live figure is the point of the block, so it carries the ink weight the
+   surrounding prose does not. */
+.filter-share {
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.chart-tick {
+  font: 400 11px var(--sans);
+  fill: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.chart-axis-title { font: 700 11.5px var(--sans); fill: var(--muted); }
+/* Halo in-plot text so a bar behind it stays legible, rather than boxing it. */
+.chart-label {
+  font: 800 12px var(--sans);
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.filter-hist { display: block; width: 100%; height: auto; }
+.hist-bar { fill: var(--moss); }
+/* Filtered-out bars stay visible as shape, but drop out of the reading. */
+.hist-bar-out { fill: #C9C6BC; }
+
 main {
   max-width: 1200px;
   margin: 0 auto;
