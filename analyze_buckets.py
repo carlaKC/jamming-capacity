@@ -218,6 +218,25 @@ def share_at_or_above(cdf, required_sat):
     return cdf.suffix[lo] / cdf.total
 
 
+def percentile_sat(cdf, p):
+    """Nearest-rank percentile: smallest observed value at or below which at
+    least p% of the edges fall. p is 0..100."""
+    sats, suffix, total = cdf.sats, cdf.suffix, cdf.total
+    n = len(sats)
+    if n == 0 or total <= 0:
+        return math.nan
+    rank = min(total, max(1, math.ceil(p / 100 * total)))
+    # count of edges <= sats[i] is total - suffix[i + 1], non-decreasing in i.
+    lo, hi = 0, n - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if total - suffix[mid + 1] >= rank:
+            hi = mid
+        else:
+            lo = mid + 1
+    return sats[lo]
+
+
 def type_metrics(n, cfg):
     slots = bucket_slots(n, cfg)
     k = per_peer_slots(slots["general"], cfg["min_slots"], cfg["alloc_pct"])
@@ -344,6 +363,72 @@ def print_distribution_table(bucket, metrics, cdf, prices, thresholds, col=9):
 
 
 # --------------------------------------------------------------------------
+# Channel percentile table (mirrors app.js renderPercentiles): the inverse of
+# the distribution table. Instead of "what share of edges clears $X", it asks
+# what the edge at percentile P can forward.
+#
+# Percentiles are taken over the WHOLE graph, not the filtered set, so a row
+# means the same edge whatever --min-max-htlc is doing. Rows the filter excludes
+# are marked rather than dropped, and the boundary is exactly where the filter's
+# reported share falls.
+# --------------------------------------------------------------------------
+
+PCT_COLUMNS = (
+    ("One general slot", lambda m: m["general_slot_frac"]),
+    ("Two general slots",
+     lambda m: m["general_slot_frac"] * 2 if m["k"] >= 2 else math.nan),
+    ("All general slots", lambda m: m["peer_general_frac"]),
+    ("Congestion slot", lambda m: m["congestion_slot_frac"]),
+)
+
+
+def _fmt_pctile(p):
+    """10 -> '10th percentile', 21 -> '21st percentile' (mirrors app.js)."""
+    if p != int(p):
+        return f"{p:g}th percentile"
+    n = int(p)
+    if 11 <= abs(n) % 100 <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(abs(n) % 10, "th")
+    return f"{n}{suffix} percentile"
+
+
+def print_percentile_table(full_cdf, cfg, metrics, col=19, label_col=18):
+    n = cfg["percentile_type"]
+    m = next(x for x in metrics if x["n"] == n)
+    price = cfg["percentile_price"]
+    floor = cfg["min_max_htlc"]
+
+    print("-" * 78)
+    print(f"Channel percentiles — {n}-slot channels")
+    print("Largest single HTLC each bucket admits for the edge at a given")
+    print(f"max_htlc percentile, in USD at ${price:,.0f}/BTC, over all "
+          f"{int(full_cdf.total):,} edges.")
+    if floor > 0:
+        print(f"Rows marked (filtered) are below the {floor:,} sat filter and "
+              f"are excluded")
+        print("from the tables above.")
+    print("-" * 78)
+
+    print(" " * (label_col + 2)
+          + "".join(f"{label:>{col}}" for label, _ in PCT_COLUMNS))
+    for p in cfg["percentiles"]:
+        base = percentile_sat(full_cdf, p)
+        row = f"  {_fmt_pctile(p):<{label_col}}"
+        for _, pick in PCT_COLUMNS:
+            frac = pick(m)
+            if not (frac > 0) or math.isnan(base):
+                row += f"{'n/a':>{col}}"
+            else:
+                row += f"{'$' + f'{sat_to_usd(base * frac, price):,.2f}':>{col}}"
+        if floor > 0 and not math.isnan(base) and base < floor:
+            row += "  (filtered)"
+        print(row)
+    print()
+
+
+# --------------------------------------------------------------------------
 # Main analysis.
 # --------------------------------------------------------------------------
 
@@ -356,6 +441,7 @@ def analyze(graph, cfg, source, csv_path=None):
     full_hist = sorted(Counter(kept).items())
     hist = filter_hist(full_hist, cfg["min_max_htlc"])
     cdf = make_cdf(hist)
+    full_cdf = make_cdf(full_hist)
     if not hist:
         print(f"--min-max-htlc {cfg['min_max_htlc']} filtered out every edge",
               file=sys.stderr)
@@ -408,6 +494,8 @@ def analyze(graph, cfg, source, csv_path=None):
                                  cfg["prices"], cfg["thresholds"])
         print_distribution_table("congestion", metrics, cdf,
                                  cfg["prices"], cfg["thresholds"])
+
+    print_percentile_table(full_cdf, cfg, metrics)
 
     if csv_path:
         _write_csv(csv_path, metrics, cdf, cfg)
@@ -502,6 +590,23 @@ def self_test():
     assert hist_value_total(filter_hist(fhist, 200)) == 800
     assert abs(share_at_or_above(make_cdf(filter_hist(fhist, 200)), 400)
                - 1 / 3) < 1e-12
+    # Nearest-rank percentiles over 100 100 100 200 200 200 200 200 300 300.
+    pcdf = make_cdf([(100, 3), (200, 5), (300, 2)])
+    assert percentile_sat(pcdf, 0) == 100
+    assert percentile_sat(pcdf, 30) == 100
+    assert percentile_sat(pcdf, 31) == 200
+    assert percentile_sat(pcdf, 80) == 200
+    assert percentile_sat(pcdf, 81) == 300
+    assert percentile_sat(pcdf, 100) == 300
+    assert math.isnan(percentile_sat(make_cdf([]), 50))
+    # Ordinal row labels match app.js's fmtPctile.
+    assert _fmt_pctile(10) == "10th percentile"
+    assert _fmt_pctile(1) == "1st percentile"
+    assert _fmt_pctile(2) == "2nd percentile"
+    assert _fmt_pctile(3) == "3rd percentile"
+    assert _fmt_pctile(11) == "11th percentile"
+    assert _fmt_pctile(21) == "21st percentile"
+    assert _fmt_pctile(99.5) == "99.5th percentile"
     # Conversions round trip.
     assert abs(sat_to_usd(20_000, 50_000) - 10) < 1e-9
     assert abs(sat_to_usd(usd_to_sat(37, 75_000), 75_000) - 37) < 1e-9
@@ -545,6 +650,15 @@ def main(argv=None):
     parser.add_argument("--congestion-slots", type=int, default=10, metavar="N",
                         help="congestion bucket slot count "
                              "(--slot-mode fixed; default: 10)")
+    parser.add_argument("--percentiles", type=float, nargs="+",
+                        default=[10, 25, 50, 75, 90, 99], metavar="P",
+                        help="max_htlc percentile rows (default: 10 25 50 75 90 99)")
+    parser.add_argument("--percentile-price", type=float, default=75_000,
+                        metavar="USD",
+                        help="BTC price for the percentile table (default: 75000)")
+    parser.add_argument("--percentile-type", type=int, default=None, metavar="N",
+                        help="channel type for the percentile table "
+                             "(default: the largest --channel-types entry)")
     parser.add_argument("--min-max-htlc", type=int,
                         default=DEFAULT_MIN_MAX_HTLC, metavar="SAT",
                         help="drop directions advertising less than this many "
@@ -588,8 +702,18 @@ def main(argv=None):
     if args.min_max_htlc < 0:
         parser.error("--min-max-htlc must be >= 0")
 
+    percentile_type = args.percentile_type
+    if percentile_type is None:
+        percentile_type = max(args.channel_types)
+    elif percentile_type not in args.channel_types:
+        parser.error(f"--percentile-type {percentile_type} is not one of "
+                     f"--channel-types {args.channel_types}")
+
     cfg = {
         "channel_types": args.channel_types,
+        "percentile_type": percentile_type,
+        "percentiles": args.percentiles,
+        "percentile_price": args.percentile_price,
         "min_max_htlc": args.min_max_htlc,
         "general_pct": args.general_pct,
         "congestion_pct": args.congestion_pct,

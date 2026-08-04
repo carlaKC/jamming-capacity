@@ -116,4 +116,24 @@ eq(M.histogramBuckets([[1e12, 1]], 2, 3)[5].count, 1, "over-range clamps to last
 eq(M.histogramBuckets([[0, 9]], 2, 3).reduce((a, b) => a + b.count, 0), 0,
   "zero-sat entries have no log position and are skipped");
 
+// --- percentileSat: nearest rank over the same histogram.
+// [[100,3],[200,5],[300,2]] -> 100 100 100 200 200 200 200 200 300 300
+const pcdf = M.makeCdf([[100, 3], [200, 5], [300, 2]]);
+eq(M.percentileSat(pcdf, 0), 100, "p0 -> smallest");
+eq(M.percentileSat(pcdf, 10), 100, "p10 -> 1st value");
+eq(M.percentileSat(pcdf, 30), 100, "p30 -> 3rd value, still the minimum");
+eq(M.percentileSat(pcdf, 31), 200, "p31 -> 4th value");
+eq(M.percentileSat(pcdf, 80), 200, "p80 -> 8th value");
+eq(M.percentileSat(pcdf, 81), 300, "p81 -> 9th value");
+eq(M.percentileSat(pcdf, 100), 300, "p100 -> largest");
+ok(Number.isNaN(M.percentileSat(M.makeCdf([]), 50)), "empty hist -> NaN");
+// The percentile rows are taken over the whole graph, not the filtered set, so
+// that a row means the same edge whatever the filter is doing.
+const wide = M.makeCdf([[100, 3], [200, 5], [300, 2]]);
+eq(M.percentileSat(wide, 50), M.percentileSat(M.makeCdf([[100, 3], [200, 5], [300, 2]]), 50),
+  "percentiles depend only on the histogram handed in");
+ok(M.percentileSat(M.makeCdf(M.filterHist([[100, 3], [200, 5], [300, 2]], 200)), 10) !==
+  M.percentileSat(wide, 10),
+  "filtering first would move the rows -- which is why the page does not");
+
 console.log(`math.test.js: ${passed} assertions passed`);

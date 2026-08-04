@@ -200,6 +200,24 @@
     return cdf.suffix[lowerBound(cdf, requiredSat)] / cdf.total;
   }
 
+  // Nearest-rank percentile: the smallest observed value at or below which at
+  // least p% of the edges fall. p is 0..100; p=100 gives the largest value.
+  function percentileSat(cdf, p) {
+    const n = cdf.sats.length;
+    if (n === 0 || !(cdf.total > 0)) return NaN;
+    const rank = Math.min(cdf.total,
+      Math.max(1, Math.ceil((p / 100) * cdf.total)));
+    // count of edges <= sats[i] is total - suffix[i + 1], non-decreasing in i.
+    let lo = 0;
+    let hi = n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cdf.total - cdf.suffix[mid + 1] >= rank) hi = mid;
+      else lo = mid + 1;
+    }
+    return cdf.sats[lo];
+  }
+
   return {
     SAT_PER_BTC,
     bucketSlotsPct,
@@ -219,5 +237,6 @@
     histValueTotal,
     histogramBuckets,
     shareAtOrAbove,
+    percentileSat,
   };
 });

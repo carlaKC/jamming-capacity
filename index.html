@@ -130,6 +130,27 @@
       </ul>
     </details>
 
+    <details class="result-section" open>
+      <summary class="results-head">Channel percentiles</summary>
+      <div class="section-intro">
+        <p>
+	  The inverse of the table above: rather than asking what share of edges
+	  clears a payment, this asks what the edge at a given
+	  <code>max_htlc</code> percentile can actually forward through one
+	  general slot, two, a peer's whole allocation, or a congestion slot.
+        </p>
+        <p>
+	  Percentiles are taken over the <strong>whole</strong> graph, not the
+	  filtered set, so a row means the same edge whatever the filter is
+	  doing. Rows the filter excludes are greyed: the share it reports is
+	  where that boundary falls, so a filter dropping 20% of edges greys
+	  every row below the 20th percentile.
+        </p>
+        </div>
+      <p class="table-caption" id="pct-caption"></p>
+      <div class="table-wrap" id="pct-wrap"></div>
+    </details>
+
   </section>
 </main>
 <footer>
