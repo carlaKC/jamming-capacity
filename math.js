@@ -131,26 +131,14 @@
   }
 
   // hist: [[sat, count], ...] ascending by sat.
-  // suffix[i]      = number of edges with value >= sats[i].
-  // valueSuffix[i] = summed max_htlc of those edges, for weighting an edge by
-  //                  the size it advertises rather than one-edge-one-vote.
+  // suffix[i] = number of edges with value >= sats[i].
   function makeCdf(hist) {
     const n = hist.length;
     const sats = new Float64Array(n);
     const suffix = new Float64Array(n + 1);
-    const valueSuffix = new Float64Array(n + 1);
     for (let i = 0; i < n; i++) sats[i] = hist[i][0];
-    for (let i = n - 1; i >= 0; i--) {
-      suffix[i] = suffix[i + 1] + hist[i][1];
-      valueSuffix[i] = valueSuffix[i + 1] + hist[i][0] * hist[i][1];
-    }
-    return {
-      sats,
-      suffix,
-      valueSuffix,
-      total: suffix[0],
-      valueTotal: valueSuffix[0],
-    };
+    for (let i = n - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + hist[i][1];
+    return { sats, suffix, total: suffix[0] };
   }
 
   // Index of the first entry with value >= requiredSat.
@@ -169,44 +157,6 @@
   function shareAtOrAbove(cdf, requiredSat) {
     if (cdf.total === 0 || requiredSat === Infinity) return 0;
     return cdf.suffix[lowerBound(cdf, requiredSat)] / cdf.total;
-  }
-
-  // Share of total advertised max_htlc (0..1) sitting on edges >= requiredSat.
-  // The liquidity-weighted counterpart to shareAtOrAbove: big edges carry more
-  // of the traffic a payment could route over, so they count for more.
-  function valueShareAtOrAbove(cdf, requiredSat) {
-    if (!(cdf.valueTotal > 0) || requiredSat === Infinity) return 0;
-    return cdf.valueSuffix[lowerBound(cdf, requiredSat)] / cdf.valueTotal;
-  }
-
-  // A payment of `sat` clears one hop's general bucket when the edge's base
-  // value is at least sat / frac, where frac is the per-peer general
-  // allocation scaled by any per-slot oversubscription.
-  function perHopRoutability(cdf, sat, frac, weighting) {
-    if (!(frac > 0)) return 0;
-    const required = sat / frac;
-    return weighting === "count"
-      ? shareAtOrAbove(cdf, required)
-      : valueShareAtOrAbove(cdf, required);
-  }
-
-  // A sampled route clears when every channel a general bucket applies to
-  // clears. The allocation is the same fraction `frac` of every channel's
-  // max_htlc, so the route clears a payment of `sat` exactly when its
-  // bottleneck -- the smallest max_htlc among those channels -- is at least
-  // sat / frac. routeCdf is built over the sampled bottlenecks for one hop
-  // count; routes count once each, since weighting them by size would weight
-  // them by the very quantity being tested.
-  function routeRoutability(routeCdf, sat, frac) {
-    if (!routeCdf || !(frac > 0)) return 0;
-    return shareAtOrAbove(routeCdf, sat / frac);
-  }
-
-  // hopsHist: { "1": [[sat, count], ...], ... } keyed by forwarding-node count.
-  function makeRouteCdfs(hopsHist) {
-    const out = {};
-    for (const hops in hopsHist) out[hops] = makeCdf(hopsHist[hops]);
-    return out;
   }
 
   // Nearest-rank percentile: the smallest observed value at or below which at
@@ -243,10 +193,6 @@
     requiredBaseSat,
     makeCdf,
     shareAtOrAbove,
-    valueShareAtOrAbove,
-    perHopRoutability,
-    routeRoutability,
-    makeRouteCdfs,
     percentileSat,
   };
 });

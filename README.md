@@ -56,53 +56,14 @@ exits non-zero on the command line.
   general slot, a peer's whole general allocation (k slots), or a congestion
   slot. The corner cell picks the BTC price and the channel type; hover a cell
   for sat values.
-- **General-bucket routability**: what share of routes keeps moving through the
-  general bucket with no reputation, against payment size. Measured over real
-  routes sampled from the graph, not composed from a per-hop probability. A
-  heatmap sweeps one to six hops. Set the payment size by typing it or by
-  dragging across either the chart or the heatmap; the shaded band marks the
-  $10–$200 range where everyday payments sit.
-
-At the defaults, a $50 payment at $75k/BTC clears a one-hop route 41.2% of the
-time and a three-hop route 16.9%.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction
 advertises none (about a fifth of them), 99% of channel capacity stands in: the
-median advertising direction sets exactly that, and dropping them would compound
-along a route and bias the sample towards paths of well-configured nodes.
-Directed policies enter the histogram only when the advertising node has more
-than one channel (single-channel nodes are assumed to be non-forwarding), though
-such nodes are still sampled as route endpoints.
-
-### How routes are sampled
-
-`build_data.py` walks the real graph, and the page reads the result:
-
-- Endpoints are drawn uniformly from every node with a channel. Most of the
-  network is single-channel, so this reproduces the spoke → hub → … → hub →
-  spoke shape without asserting it: a degree-1 node can never be an
-  intermediate hop.
-- Each pair is routed by shortest hop count, cheapest among equals. Scoring on
-  fee alone chases zero-fee channels through five- and six-hop paths, which is
-  not what a sender picks.
-- A **hop** is a node that forwards. `A→B→C` is one hop; a direct payment is
-  none.
-- The route's first channel is dropped — the sender is not forwarding, so no
-  general bucket applies to it. This matters: the sender's own channel is the
-  single binding constraint on about 44% of routes, and it is systematically
-  the smallest one on the path.
-- What remains is reduced to the route's **bottleneck**, the smallest
-  `max_htlc` among the gated channels.
-
-Because the general allocation is the same fraction `f` of every channel's
-`max_htlc`, a route clears a payment `p` exactly when `bottleneck ≥ p / f`. The
-bottleneck therefore depends only on the topology, so every bucket parameter on
-the page stays live against a frozen route sample.
-
-Hop counts are different populations of node pairs, so the rows are not nested —
-one-hop routes are not simply the best case, since their only gated channel is
-the delivery into the destination, and destinations are usually small.
+median advertising direction sets exactly that, and dropping them would bias the
+histogram towards well-configured nodes. Directed policies enter the histogram
+only when the advertising node has more than one channel (single-channel nodes
+are assumed to be non-forwarding).
 
 ## Screenshots
 
@@ -120,11 +81,6 @@ The channel percentile table — what each bucket lets the edge at a given
 
 ![Channel percentile table](percentile_table.png)
 
-The routability visualizer — the gap between one-hop and three-hop routes is the
-flow forced onto reputation:
-
-![General-bucket routability](routability.png)
-
 ## Reproduce the numbers on the command line
 
 `analyze_buckets.py` is the headless twin of the page: it runs the same bucket
@@ -140,12 +96,10 @@ All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--slot-mode`, `--general-slot-pct`, `--congestion-slot-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--prices`, `--thresholds`, `--percentiles`,
-`--percentile-price`, `--percentile-type`, `--payments`, `--route-sources`,
-`--route-per-source`, `--route-seed`);
+`--percentile-price`, `--percentile-type`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
-a bare run reproduces the example screenshots above. It re-samples routes from
-the graph rather than reading `data.js`, so with the default seed it reproduces
-the page's routability figures exactly.
+a bare run reproduces the example screenshots above. It reads the graph dump
+directly rather than `data.js`.
 
 ## Regenerate the data
 
@@ -156,13 +110,10 @@ fresh `lncli describegraph` dump:
 python3 build_data.py mainnet.json --output data.js
 ```
 
-This also re-samples the routes behind the routability section
-(`--sources`, `--per-source`, `--route-seed`), which takes about 25 seconds.
-
 ## Tests
 
 ```
 node math.test.js                    # pure bucket math (browser)
-python3 build_data.py --self-test    # graph filtering, imputation, route sampling
+python3 build_data.py --self-test    # graph filtering and imputation
 python3 analyze_buckets.py --self-test   # command-line bucket math
 ```

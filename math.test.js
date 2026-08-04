@@ -80,52 +80,6 @@ eq(M.shareAtOrAbove(cdf, 401), 0, "nothing qualifies");
 eq(M.shareAtOrAbove(cdf, Infinity), 0, "Infinity -> 0");
 eq(M.shareAtOrAbove(M.makeCdf([]), 100), 0, "empty hist -> 0");
 
-// --- valueShareAtOrAbove: same CDF weighted by advertised max_htlc.
-// [[100,1],[200,2],[400,1]] -> total value 100 + 400 + 400 = 900.
-eq(cdf.valueTotal, 900, "total advertised value");
-eq(M.valueShareAtOrAbove(cdf, 1), 1, "everything qualifies");
-approx(M.valueShareAtOrAbove(cdf, 101), 800 / 900, 1e-12, "drops the 100-sat edge");
-approx(M.valueShareAtOrAbove(cdf, 201), 400 / 900, 1e-12, "only the 400-sat edge");
-eq(M.valueShareAtOrAbove(cdf, 401), 0, "nothing qualifies");
-eq(M.valueShareAtOrAbove(cdf, Infinity), 0, "Infinity -> 0");
-eq(M.valueShareAtOrAbove(M.makeCdf([]), 100), 0, "empty hist -> 0");
-// Weighting the big edges up must never lower the share on this histogram,
-// where the qualifying set is always the largest edges.
-for (const t of [1, 100, 101, 200, 201, 400]) {
-  ok(M.valueShareAtOrAbove(cdf, t) >= M.shareAtOrAbove(cdf, t) - 1e-12,
-    `value share >= count share at ${t}`);
-}
-
-// --- perHopRoutability / routeRoutability
-// frac 0.5 means a 100-sat payment needs a 200-sat edge.
-approx(M.perHopRoutability(cdf, 100, 0.5, "count"), 0.75, 1e-12, "per hop, count-weighted");
-approx(M.perHopRoutability(cdf, 100, 0.5, "value"), 800 / 900, 1e-12, "per hop, value-weighted");
-eq(M.perHopRoutability(cdf, 100, 0, "count"), 0, "zero frac -> nothing routes");
-eq(M.perHopRoutability(cdf, 100, NaN, "count"), 0, "NaN frac -> nothing routes");
-
-// --- routeRoutability / makeRouteCdfs
-// Route bottlenecks, not per-channel values: 2 routes bottleneck at 100 sat,
-// 5 at 200, 3 at 400. At frac 0.5 a 100-sat payment needs a 200-sat bottleneck.
-const routeCdfs = M.makeRouteCdfs({
-  "1": [[100, 2], [200, 5], [400, 3]],
-  "3": [[100, 6], [200, 3], [400, 1]],
-});
-approx(M.routeRoutability(routeCdfs["1"], 100, 0.5), 0.8, 1e-12,
-  "one hop: 8 of 10 sampled routes clear");
-approx(M.routeRoutability(routeCdfs["3"], 100, 0.5), 0.4, 1e-12,
-  "three hops: 4 of 10 clear");
-// Longer routes are a different population of pairs, not a power of the
-// shorter one -- the whole point of measuring rather than composing.
-ok(M.routeRoutability(routeCdfs["3"], 100, 0.5) !==
-  Math.pow(M.routeRoutability(routeCdfs["1"], 100, 0.5), 3),
-  "route share is measured, not perHop^hops");
-eq(M.routeRoutability(routeCdfs["1"], 100, 0), 0, "zero frac -> nothing routes");
-eq(M.routeRoutability(routeCdfs["1"], 100, NaN), 0, "NaN frac -> nothing routes");
-eq(M.routeRoutability(undefined, 100, 0.5), 0, "no sample for that hop -> 0");
-eq(M.routeRoutability(routeCdfs["1"], 1, 0.5), 1, "tiny payment clears every route");
-eq(M.routeRoutability(routeCdfs["1"], 1e9, 0.5), 0, "huge payment clears none");
-eq(Object.keys(M.makeRouteCdfs({})).length, 0, "no hop buckets -> no cdfs");
-
 // --- percentileSat: nearest rank over the same histogram.
 // [[100,3],[200,5],[300,2]] -> 100 100 100 200 200 200 200 200 300 300
 const pcdf = M.makeCdf([[100, 3], [200, 5], [300, 2]]);

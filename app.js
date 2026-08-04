@@ -4,11 +4,8 @@
   "use strict";
 
   const M = window.BucketMath;
-  const R = window.RoutabilityView;
   const DATA = window.EDGE_DATA;
   const CDF = M.makeCdf(DATA.hist);
-  // Sampled route bottlenecks, keyed by how many nodes forward on the route.
-  const ROUTE_CDFS = M.makeRouteCdfs((DATA.routes || {}).hops || {});
 
   const PERCENTILES = [10, 25, 50, 75, 90, 99];
   const DEFAULT_PCT_PRICE = 75000;
@@ -412,13 +409,6 @@
     renderMetrics(metrics);
     renderTable(metrics);
     renderPercentiles();
-    // The routability section owns its own cursor, weighting and
-    // oversubscription; it takes the bucket parameters from here.
-    R.update({
-      typeMetrics,
-      channelTypes: state.channelTypes,
-      prices: state.prices,
-    });
   }
 
   // ---------------- validation helpers ----------------
@@ -662,16 +652,12 @@
 
   // ---------------- boot ----------------
 
-  const routeStats = (DATA.routes || {}).stats || {};
   $("provenance").textContent =
     "Data: " + DATA.source + " (" + DATA.generated + ") — " +
     fmtInt(DATA.directionsKept) + " directed edges kept, " +
     fmtInt(DATA.directionsDropped) + " dropped (single-channel node), " +
-    fmtInt(DATA.directionsImputed) +
-    " with max_htlc imputed from capacity; " +
-    fmtInt(routeStats.sampled || 0) + " routes sampled.";
+    fmtInt(DATA.directionsImputed) + " with max_htlc imputed from capacity.";
 
-  R.mount({ M, ROUTE: ROUTE_CDFS, tooltip: $("tooltip") });
   syncSlotModeUi();
   renderAll();
 })();
