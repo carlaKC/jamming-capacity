@@ -92,6 +92,17 @@ eq(M.filterHist(fhist, 401).length, 0, "floor above everything empties it");
 eq(M.shareAtOrAbove(M.makeCdf(M.filterHist(fhist, 200)), 400), 1 / 3,
   "share is over survivors, not the original total");
 
+// --- histValueTotal: summed advertised max_htlc, the liquidity-side counterpart
+// to the edge count. 100x1 + 200x2 + 400x1 = 900.
+eq(M.histValueTotal(fhist), 900, "summed advertised value");
+eq(M.histValueTotal([]), 0, "empty hist -> 0");
+// The point of tracking both: a floor at 200 drops 1 of 4 edges (25%) but only
+// 100 of 900 sat (11%), because the dropped edge is the smallest one.
+eq(M.makeCdf(M.filterHist(fhist, 200)).total / M.makeCdf(fhist).total, 0.75,
+  "three quarters of the edges survive");
+approx(M.histValueTotal(M.filterHist(fhist, 200)) / M.histValueTotal(fhist),
+  800 / 900, 1e-12, "but eight ninths of the advertised value");
+
 // --- histogramBuckets: log-spaced bars that tile the axis exactly.
 const buckets = M.histogramBuckets([[1, 5], [10, 3], [15, 2], [50, 4], [999, 7]], 2, 3);
 eq(buckets.length, 6, "2 per decade x 3 decades");

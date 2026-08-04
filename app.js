@@ -6,11 +6,14 @@
   const M = window.BucketMath;
   const DATA = window.EDGE_DATA;
   const FULL_CDF = M.makeCdf(DATA.hist);
-  // Rebuilt whenever the graph filter moves; every table reads this one.
-  let CDF = FULL_CDF;
+  const cdfFor = (sat) =>
+    sat > 0 ? M.makeCdf(M.filterHist(DATA.hist, sat)) : FULL_CDF;
 
   const PERCENTILES = [10, 25, 50, 75, 90, 99];
   const DEFAULT_PCT_PRICE = 75000;
+  // The cutoff under consideration: below this a channel is too small to
+  // forward a payment once any bucket restriction applies to it.
+  const DEFAULT_MIN_HTLC_SAT = 100000;
 
   const state = {
     generalPct: 40,
@@ -19,7 +22,7 @@
     // percentage of max_accepted_htlcs instead.
     slotMode: "fixed",
     // Advertised max_htlc floor, in sats. 0 keeps the whole graph.
-    minHtlcSat: 0,
+    minHtlcSat: DEFAULT_MIN_HTLC_SAT,
     generalSlotPct: 40,
     congestionSlotPct: 20,
     generalSlots: 30,
@@ -35,6 +38,11 @@
     pctPrice: DEFAULT_PCT_PRICE,
     pctType: 483,
   };
+
+  // Rebuilt whenever the graph filter moves; every table reads this one. Seeded
+  // from the default floor rather than the whole graph, so the first paint is
+  // already filtered and the tables agree with the line above them.
+  let CDF = cdfFor(state.minHtlcSat);
 
   const $ = (id) => document.getElementById(id);
 
@@ -494,6 +502,25 @@
     placeTooltip(x, y);
   }
 
+  // Pointer x to a sat value. This measures whatever SVG is on the page right
+  // now rather than closing over one: setting the filter re-renders the chart,
+  // so a node captured at pointerdown is detached by the first drag move and
+  // reports a zero-width box.
+  function satAt(clientX) {
+    const live = $("filter-hist").querySelector("svg");
+    if (!live) return 0;
+    const box = live.getBoundingClientRect();
+    if (!box.width) return 0;
+    const px = ((clientX - box.left) / box.width) * GW;  // viewBox units
+    const decades = ((px - GPAD.left) / GPW) * HIST_DECADES;
+    return Math.pow(10, Math.min(HIST_DECADES, Math.max(0, decades)));
+  }
+
+  function bucketAt(sat) {
+    const i = Math.floor(Math.log10(Math.max(1, sat)) * HIST_PER_DECADE);
+    return HIST_BUCKETS[Math.min(HIST_BUCKETS.length - 1, Math.max(0, i))];
+  }
+
   function renderHistogram() {
     const floor = state.minHtlcSat;
     const node = svg("svg", {
@@ -581,24 +608,13 @@
       x: GPAD.left, y: GPAD.top - 10, width: GPW, height: GPH + 10,
       fill: "transparent", class: "chart-overlay",
     });
-    const satAt = (clientX) => {
-      const box = node.getBoundingClientRect();
-      if (!box.width) return 0;
-      const px = ((clientX - box.left) / box.width) * GW;  // viewBox units
-      const decades = ((px - GPAD.left) / GPW) * HIST_DECADES;
-      return Math.pow(10, Math.min(HIST_DECADES, Math.max(0, decades)));
-    };
-    const bucketAt = (sat) => {
-      const i = Math.floor(Math.log10(Math.max(1, sat)) * HIST_PER_DECADE);
-      return HIST_BUCKETS[Math.min(HIST_BUCKETS.length - 1, Math.max(0, i))];
-    };
     overlay.addEventListener("pointermove", (e) => {
       if (!dragging) showBarTooltip(bucketAt(satAt(e.clientX)), e.clientX, e.clientY);
     });
     overlay.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       hideTooltip();
-      startFilterDrag(satAt);
+      startFilterDrag();
       setMinHtlc(snapFloor(satAt(e.clientX)));
     });
     node.appendChild(overlay);
@@ -626,7 +642,7 @@
 
   // Listeners live on the document so the drag survives the pointer leaving
   // the plot, and so re-rendering the SVG mid-drag cannot orphan them.
-  function startFilterDrag(satAt) {
+  function startFilterDrag() {
     dragging = true;
     document.body.classList.add("dragging-cursor");
     let queued = null;
@@ -651,23 +667,36 @@
     document.addEventListener("pointerup", end);
   }
 
-  // A flat 0% or 100% next to a count that says otherwise reads as a bug, and
-  // the far end of the drag genuinely lands at 99.998%.
-  function fmtFilteredShare(removed, total) {
-    const pct = total > 0 ? (removed / total) * 100 : 0;
-    if (removed > 0 && pct < 0.05) return "under 0.1%";
-    if (removed < total && pct >= 99.95) return "over 99.9%";
-    return pct.toFixed(1) + "%";
+  // A flat 0% or 100% next to a count that says otherwise reads as a bug: the
+  // far end of the drag genuinely lands at 99.998%, and the liquidity share at
+  // the default floor is 0.09%, which is the whole point of stating it.
+  function fmtFilteredShare(part, whole, digits) {
+    const pct = whole > 0 ? (part / whole) * 100 : 0;
+    const step = Math.pow(10, -digits);
+    if (part > 0 && pct < step / 2) return "under " + step.toFixed(digits) + "%";
+    if (part < whole && pct >= 100 - step / 2) {
+      return "over " + (100 - step).toFixed(digits) + "%";
+    }
+    return pct.toFixed(digits) + "%";
   }
+
+  const FULL_VALUE = M.histValueTotal(DATA.hist);
 
   function renderFilter() {
     const kept = CDF.total;
     const total = FULL_CDF.total;
     const removed = total - kept;
+    // Edges and liquidity answer different questions: the small channels are
+    // numerous but hold almost nothing, and the gap between the two figures is
+    // the argument for filtering them at all.
+    const keptValue = state.minHtlcSat > 0
+      ? M.histValueTotal(M.filterHist(DATA.hist, state.minHtlcSat))
+      : FULL_VALUE;
     $("filter-share").textContent = state.minHtlcSat > 0
-      ? "Filtering " + fmtFilteredShare(removed, total) + " of the graph — " +
-        fmtInt(removed) + " of " + fmtInt(total) +
-        " directed edges dropped, " + fmtInt(kept) + " left."
+      ? "Filtering " + fmtFilteredShare(removed, total, 1) + " of edges and " +
+        fmtFilteredShare(FULL_VALUE - keptValue, FULL_VALUE, 2) +
+        " of advertised liquidity — " + fmtInt(removed) + " of " +
+        fmtInt(total) + " directed edges dropped, " + fmtInt(kept) + " left."
       : "No filter: all " + fmtInt(total) + " directed edges are in view.";
     syncFilterSelect();
     $("filter-hist").replaceChildren(renderHistogram());
@@ -686,7 +715,7 @@
     // force; rebuilding every table for those is wasted work.
     if (sat === state.minHtlcSat) return;
     state.minHtlcSat = sat;
-    CDF = sat > 0 ? M.makeCdf(M.filterHist(DATA.hist, sat)) : FULL_CDF;
+    CDF = cdfFor(sat);
     renderAll();
   }
 
@@ -713,6 +742,15 @@
   }
 
   function mountFilterControl() {
+    // Written from the constants rather than the markup, so the stated dollar
+    // figure cannot drift from the default the page actually applies.
+    $("filter-default-note").textContent =
+      "We set this value to a default of " + fmtInt(DEFAULT_MIN_HTLC_SAT) +
+      " sat, which is around " +
+      fmtUsd(Math.round(M.satToUsd(DEFAULT_MIN_HTLC_SAT, DEFAULT_PCT_PRICE))) +
+      " at " + fmtUsd(DEFAULT_PCT_PRICE) + " / BTC, as this is the cutoff " +
+      "we're considering.";
+
     const sel = $("min-htlc");
     for (const sat of HTLC_FLOORS) {
       const opt = el("option", null,

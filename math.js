@@ -149,6 +149,16 @@
     return hist.filter((entry) => entry[0] >= minSat);
   }
 
+  // Summed advertised max_htlc over a histogram. Counting edges and summing
+  // what they advertise answer different questions about a filter: the small
+  // channels are numerous but hold little, so dropping a fifth of the edges
+  // need not drop anything like a fifth of the liquidity.
+  function histValueTotal(hist) {
+    let total = 0;
+    for (const [sat, count] of hist) total += sat * count;
+    return total;
+  }
+
   // Log-spaced buckets for the edge histogram: `perDecade` bars per power of
   // ten, covering 1 sat up to 10^decades. Bucket i spans
   // [10^(i/perDecade), 10^((i+1)/perDecade)), so the bars tile the log axis
@@ -224,6 +234,7 @@
     requiredBaseSat,
     makeCdf,
     filterHist,
+    histValueTotal,
     histogramBuckets,
     shareAtOrAbove,
     percentileSat,

@@ -38,6 +38,10 @@ from build_data import parse_graph
 # --------------------------------------------------------------------------
 
 SAT_PER_BTC = 100_000_000
+
+# The cutoff under consideration: below this a channel is too small to forward
+# a payment once any bucket restriction applies to it. Matches app.js.
+DEFAULT_MIN_MAX_HTLC = 100_000
 MSAT_PER_SAT = 1_000
 
 
@@ -198,6 +202,15 @@ def filter_hist(hist, min_sat):
     if not (min_sat > 0):
         return hist
     return [(sat, count) for sat, count in hist if sat >= min_sat]
+
+
+def hist_value_total(hist):
+    """Summed advertised max_htlc, mirroring math.js's histValueTotal.
+
+    Counting edges and summing what they advertise answer different questions
+    about a filter: the small channels are numerous but hold little.
+    """
+    return sum(sat * count for sat, count in hist)
 
 
 def share_at_or_above(cdf, required_sat):
@@ -428,10 +441,15 @@ def analyze(graph, cfg, source, csv_path=None):
           f"{stats['imputed']:,} with max_htlc imputed from capacity.")
     if cfg["min_max_htlc"] > 0:
         removed = len(kept) - int(cdf.total)
+        full_value = hist_value_total(full_hist)
+        kept_value = hist_value_total(hist)
+        dropped_value = full_value - kept_value
         print(f"Graph filter: max_htlc >= {cfg['min_max_htlc']:,} sat — "
               f"{removed:,} more edges dropped "
-              f"({removed / len(kept) * 100:.1f}% of the graph), "
-              f"{int(cdf.total):,} left. Every figure below is a share of those.")
+              f"({removed / len(kept) * 100:.1f}% of edges, "
+              f"{dropped_value / full_value * 100:.2f}% of advertised "
+              f"liquidity), {int(cdf.total):,} left. Every figure below is a "
+              f"share of those.")
     print(f"Bucket liquidity split: general {cfg['general_pct']}%, "
           f"congestion {cfg['congestion_pct']}%, "
           f"protected {100 - cfg['general_pct'] - cfg['congestion_pct']}% "
@@ -542,6 +560,11 @@ def self_test():
     assert filter_hist(fhist, 200) == [(200, 2), (400, 1)]
     assert filter_hist(fhist, 401) == []
     assert make_cdf(filter_hist(fhist, 200)).total == 3
+    # Edges and liquidity move differently: a floor at 200 drops 1 of 4 edges
+    # but only 100 of 900 sat, because the dropped edge is the smallest.
+    assert hist_value_total(fhist) == 900
+    assert hist_value_total([]) == 0
+    assert hist_value_total(filter_hist(fhist, 200)) == 800
     assert abs(share_at_or_above(make_cdf(filter_hist(fhist, 200)), 400)
                - 1 / 3) < 1e-12
     # Nearest-rank percentiles over 100 100 100 200 200 200 200 200 300 300.
@@ -605,10 +628,11 @@ def main(argv=None):
     parser.add_argument("--congestion-slots", type=int, default=10, metavar="N",
                         help="congestion bucket slot count "
                              "(--slot-mode fixed; default: 10)")
-    parser.add_argument("--min-max-htlc", type=int, default=0, metavar="SAT",
+    parser.add_argument("--min-max-htlc", type=int,
+                        default=DEFAULT_MIN_MAX_HTLC, metavar="SAT",
                         help="drop directions advertising less than this many "
                              "sats, as the page's Filtering section does "
-                             "(default: 0, keep the whole graph)")
+                             "(default: %(default)s; 0 keeps the whole graph)")
     parser.add_argument("--min-slots", type=int, default=5, metavar="N",
                         help="per-peer general slot floor (default: 5)")
     parser.add_argument("--alloc-pct", type=float, default=5, metavar="P",

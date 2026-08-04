@@ -59,15 +59,24 @@ exits non-zero on the command line.
 
 ## Filtering
 
-The **Filtering** section sets a floor on advertised `max_htlc`: directions
-below it are treated as absent from the graph, not down-weighted. Every table
-underneath is recomputed over the survivors, so its percentages are shares of
-what is left rather than of the whole network. It answers what the proposal
-looks like once the smallest channels — the ones that cannot carry a useful
-payment through any bucket — are set aside.
+The **Filtering** section sets a floor on advertised `max_htlc`: edges below it
+are excluded from further analysis, treated as absent from the graph rather than
+down-weighted. Every table underneath is recomputed over the survivors, so its
+percentages are shares of what is left rather than of the whole network. The
+filtering matters because some channels are simply too small to forward payments
+with any additional restriction placed on them.
 
-Beside the dropdown, the section states how much of the graph the current floor
-removes. Below it, a histogram of advertised `max_htlc` across all directed
+**The default floor is 100,000 sat** — about $75 at $75,000/BTC — which is the
+cutoff under consideration. A fresh page is therefore already filtered.
+
+Beside the dropdown, the section states what the current floor removes, as both
+a share of edges and a share of advertised liquidity. The two are worth reading
+together: at the default floor they are 20.2% and 0.09%. A fifth of the graph's
+directed edges advertise under 100,000 sat, and between them they hold about a
+thousandth of its advertised liquidity — which is the case for setting them
+aside.
+
+Below the control sits a histogram of advertised `max_htlc` across all directed
 edges, four bars per power of ten from 1 sat to 1 G sat. Filtered bars grey out.
 Because a bar covers a range of values, a floor landing inside one cuts that bar
 in two rather than colouring the whole thing by which side its edge falls on; a
@@ -81,10 +90,10 @@ dropdown's presets; the dropdown grows an entry for whatever the drag picks, so
 the two controls always agree. Dragging off the left end clears the filter.
 
 The dropdown offers floors from 1 k to 10 M sat, the largest of which still
-leaves about an eighth of the edges in view. A drag can go further, but stops at
-the largest advertised `max_htlc` so it can never empty the graph and leave the
-tables a wall of `n/a`. On the command line the same control is
-`--min-max-htlc SAT`.
+leaves about an eighth of the edges in view, plus "No filter". A drag can go
+further, but stops at the largest advertised `max_htlc` so it can never empty
+the graph and leave the tables a wall of `n/a`. On the command line the same
+control is `--min-max-htlc SAT`, defaulting to 100000 to match the page.
 
 The base value per edge is the direction's advertised `max_htlc_msat` — the
 observable lower bound on `max_htlc_value_in_flight_msat`. Where a direction

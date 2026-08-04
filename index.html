@@ -72,13 +72,12 @@
     </label>
     <div class="filter-explainer">
       <p>
-        Directions advertising less than this are treated as absent from the
-        graph: every table below is recomputed over the channels that survive,
-        and the percentages are shares of what is left rather than of the whole
-        network. Use it to ask what the proposal looks like once the smallest
-        channels &mdash; the ones that cannot carry a useful payment through
-        any bucket &mdash; are set aside.
+        Edges that advertise a <code>max_htlc</code> less than the selected
+        amount are excluded from further analysis. This filtering is relevant
+        because some channels are simply too small to forward payments with any
+        additional restrictions placed on them.
       </p>
+      <p id="filter-default-note"></p>
       <p class="filter-share" id="filter-share"></p>
     </div>
   </div>
