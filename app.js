@@ -976,6 +976,34 @@
 
   // ---------------- current price ----------------
 
+  // A ladder of round rates either side of the default, so the common ones are
+  // one click away. Typing any other value is still the point of the field --
+  // these were previously a <datalist>, which Safari does not render on a
+  // number input at all and Chrome shows only as a faint arrow, so the presets
+  // were effectively invisible. A select is unmistakable everywhere.
+  const PRICE_PRESETS = [10000, 25000, 50000, 75000, 100000, 125000, 150000,
+    200000, 250000, 500000];
+
+  // The input holds the value; the select is a shortcut to a round one. It
+  // grows a single extra option when the typed price is not a preset, so the
+  // two never disagree about what the current price is.
+  function syncPriceSelect() {
+    const sel = $("btc-price-preset");
+    let custom = sel.querySelector("option[data-custom]");
+    if (PRICE_PRESETS.includes(state.price)) {
+      if (custom) custom.remove();
+    } else {
+      if (!custom) {
+        custom = el("option");
+        custom.dataset.custom = "1";
+        sel.appendChild(custom);
+      }
+      custom.value = String(state.price);
+      custom.textContent = "$" + compactUsd(state.price);
+    }
+    sel.value = String(state.price);
+  }
+
   function onPriceInput() {
     const v = readNumber($("btc-price"));
     const ok = Number.isFinite(v) && v > 0;
@@ -986,7 +1014,26 @@
     }
     setError("price-error", null);
     state.price = v;
+    syncPriceSelect();
     renderAll();
+  }
+
+  function mountPriceControl() {
+    const sel = $("btc-price-preset");
+    for (const p of PRICE_PRESETS) {
+      const opt = el("option", null, "$" + compactUsd(p));
+      opt.value = String(p);
+      sel.appendChild(opt);
+    }
+    sel.addEventListener("change", () => {
+      state.price = Number(sel.value);
+      $("btc-price").value = String(state.price);
+      $("btc-price").classList.remove("invalid");
+      setError("price-error", null);
+      syncPriceSelect();
+      renderAll();
+    });
+    syncPriceSelect();
   }
 
   $("btc-price").addEventListener("input", onPriceInput);
@@ -1097,6 +1144,7 @@
     fmtInt(DATA.directionsImputed) + " with max_htlc imputed from capacity.";
 
   mountFilterControl();
+  mountPriceControl();
   syncSlotModeUi();
   renderAll();
 })();

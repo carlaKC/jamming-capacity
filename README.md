@@ -31,8 +31,10 @@ columns ($50k / $75k / $100k) are fixed on the page; `analyze_buckets.py` takes
 
 Separately, **Current price** in the Parameters row sets the one rate the rest
 of the page converts sats at — the filter handle's dollar figure and the
-percentile table. It defaults to $75,000 / BTC, offers presets from a dropdown
-and takes any value you type. On the command line it is `--current-price`.
+percentile table. It defaults to $75,000 / BTC. The field takes any value you
+type; the **Preset** dropdown beside it jumps to a round rate from $10k to
+$500k, and grows an entry for whatever you typed when that is not one of them,
+so the two never disagree. On the command line it is `--current-price`.
 
 **Liquidity** is always split by percentage of `max_htlc_value_in_flight_msat`
 — general and congestion, with protected taking the remainder.

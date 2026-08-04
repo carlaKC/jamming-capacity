@@ -210,6 +210,26 @@ footer {
   border-top: 1px solid var(--border);
 }
 
+/* Preset dropdown inside a parameter card: match the number inputs beside it
+   rather than the pill-shaped selectors used in table corners. */
+.param-group select {
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  padding: 6px 10px;
+  border: 1.5px solid var(--grid);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 300ms ease, box-shadow 300ms ease;
+}
+.param-group select:hover { border-color: var(--clay); }
+.param-group select:focus-visible {
+  outline: none;
+  border-color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(93, 112, 82, 0.25);
+}
+
 /* ---- parameter panel ---- */
 .param-group {
   background: var(--surface);

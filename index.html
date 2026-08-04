@@ -66,17 +66,9 @@
       <h3>Current price</h3>
       <p class="hint">converts sats to dollars across the page</p>
       <label>USD / BTC
-        <input type="number" id="btc-price" value="75000" min="1" step="1000"
-               list="price-presets">
+        <input type="number" id="btc-price" value="75000" min="1" step="1000">
       </label>
-      <datalist id="price-presets">
-        <option value="25000"></option>
-        <option value="50000"></option>
-        <option value="75000"></option>
-        <option value="100000"></option>
-        <option value="150000"></option>
-        <option value="200000"></option>
-      </datalist>
+      <label>Preset <select id="btc-price-preset"></select></label>
       <p class="error hidden" id="price-error"></p>
     </section>
   </div>
