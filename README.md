@@ -46,14 +46,21 @@ wouldn't fit inside a selected channel type are refused rather than clamped:
 picking 30 + 10 with a 20-slot type in play raises an error on the page and
 exits non-zero on the command line.
 - **Channel distribution**: share of mainnet directed edges able to carry a
-  single HTLC of at least $X in the general bucket (per-peer liquidity
-  allocation) or the congestion bucket (one slot's liquidity), across the three
-  BTC prices. Hover a cell for sat values. The dollar thresholds are
-  the rows, and are edited in place: `+` on the last row adds one (the table
-  re-sorts around it), and hovering a row reveals a `×` to drop it. Three
-  views sit above the table: a single general slot, a peer's whole general
-  allocation (the default), and one congestion slot. Caveats on how the figures
-  are derived sit under the table.
+  single HTLC of at least $X, across the three BTC prices. Hover a cell for sat
+  values. The dollar thresholds are the rows, and are edited in place: `+` on
+  the last row adds one (the table re-sorts around it), and hovering a row
+  reveals a `×` to drop it. Caveats on how the figures are derived sit under
+  the table.
+
+  **What the columns are depends on the slot mode.** Fixed slot counts do not
+  scale with `max_accepted_htlcs`, so every channel type yields the same
+  figures — grouping by type would print one column three times. The columns
+  are the three buckets instead, and all of them are readable at once: a single
+  general slot, a peer's whole general allocation, and one congestion slot.
+  Under percentage slots the buckets do scale with the channel, so the columns
+  go back to being the channel types and a row of tabs above the table picks
+  which bucket to show. `analyze_buckets.py` splits the same way: one
+  by-bucket table under `--slot-mode fixed`, one table per bucket otherwise.
 
 ## Filtering
 

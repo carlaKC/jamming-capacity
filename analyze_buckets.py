@@ -281,42 +281,66 @@ def _compact_usd(x):
     return str(x)
 
 
-def print_distribution_table(bucket, metrics, cdf, prices, thresholds, col=9):
-    frac_key = "peer_general_frac" if bucket == "general" else "congestion_slot_frac"
-    where = ("per-peer liquidity allocation, k slots' worth"
-             if bucket == "general" else "one slot's worth of liquidity")
-    prices = sorted(prices)
-    thresholds = sorted(thresholds)
+# The three bucket views the page offers, in the order it shows them.
+BUCKET_VIEWS = (
+    ("Single general slot", "general_slot_frac"),
+    ("All general slots", "peer_general_frac"),
+    ("Congestion bucket", "congestion_slot_frac"),
+)
 
-    print("-" * 78)
-    print(f"Distribution — {bucket} bucket ({where})")
-    print("Share of mainnet directed edges able to carry a single HTLC of >= $X.")
-    print("-" * 78)
 
-    # Type group header, then per-price sub-header.
-    group = " " * 12
-    for m in metrics:
-        group += f"{fmt_int(m['n']) + ' slots':^{col * len(prices)}}"
-    print(group)
+def _distribution_rows(groups, cdf, prices, thresholds, col):
+    """Shared body: one column per (group, price), one row per threshold."""
+    group_head = " " * 12
+    for label, _ in groups:
+        group_head += f"{label:^{col * len(prices)}}"
+    print(group_head)
     sub = f"{'Threshold':<12}"
-    for _ in metrics:
+    for _ in groups:
         for p in prices:
             sub += f"{'@$' + _compact_usd(p):>{col}}"
     print(sub)
 
     for t in thresholds:
         row = f"{'>= $' + _compact_usd(t):<12}"
-        for m in metrics:
-            frac = m[frac_key]
+        for _, frac in groups:
             for p in prices:
                 if not (frac > 0):
                     row += f"{'n/a':>{col}}"
                 else:
                     req = required_base_sat(t, p, frac)
-                    share = share_at_or_above(cdf, req)
-                    row += f"{share * 100:>{col - 1}.1f}%"
+                    row += f"{share_at_or_above(cdf, req) * 100:>{col - 1}.1f}%"
         print(row)
     print()
+
+
+def print_bucket_distribution_table(metrics, cdf, prices, thresholds, col=11):
+    """Fixed slots: every channel type gives the same figures, so the columns
+    are the three buckets and one table says everything."""
+    m = metrics[0]
+    groups = [(label, m[key]) for label, key in BUCKET_VIEWS]
+    print("-" * 78)
+    print("Distribution by bucket — fixed slot counts")
+    print("Share of mainnet directed edges able to carry a single HTLC of >= $X.")
+    print("Fixed counts do not scale with max_accepted_htlcs, so every channel")
+    print("type gives these same figures.")
+    print("-" * 78)
+    _distribution_rows(groups, cdf, sorted(prices), sorted(thresholds), col)
+
+
+def print_distribution_table(bucket, metrics, cdf, prices, thresholds, col=9):
+    """Percentage slots: the buckets scale with the channel, so the columns are
+    the channel types and each bucket needs its own table."""
+    frac_key = "peer_general_frac" if bucket == "general" else "congestion_slot_frac"
+    where = ("per-peer liquidity allocation, k slots' worth"
+             if bucket == "general" else "one slot's worth of liquidity")
+    groups = [(fmt_int(m["n"]) + " slots", m[frac_key]) for m in metrics]
+
+    print("-" * 78)
+    print(f"Distribution — {bucket} bucket ({where})")
+    print("Share of mainnet directed edges able to carry a single HTLC of >= $X.")
+    print("-" * 78)
+    _distribution_rows(groups, cdf, sorted(prices), sorted(thresholds), col)
 
 
 # --------------------------------------------------------------------------
@@ -376,10 +400,14 @@ def analyze(graph, cfg, source, csv_path=None):
     print()
 
     print_metrics_table(metrics)
-    print_distribution_table("general", metrics, cdf,
-                             cfg["prices"], cfg["thresholds"])
-    print_distribution_table("congestion", metrics, cdf,
-                             cfg["prices"], cfg["thresholds"])
+    if cfg["slot_mode"] == "fixed":
+        print_bucket_distribution_table(metrics, cdf, cfg["prices"],
+                                        cfg["thresholds"])
+    else:
+        print_distribution_table("general", metrics, cdf,
+                                 cfg["prices"], cfg["thresholds"])
+        print_distribution_table("congestion", metrics, cdf,
+                                 cfg["prices"], cfg["thresholds"])
 
     if csv_path:
         _write_csv(csv_path, metrics, cdf, cfg)

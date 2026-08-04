@@ -161,21 +161,25 @@
   // the default; the other two narrow it to one slot's worth.
   const CELL_MODES = {
     generalSlot: {
+      label: "Single general slot",
       frac: (m) => m.generalSlotFrac,
       caption: "One general slot: we assume the payment occupies a single " +
         "slot of the general bucket.",
     },
     general: {
+      label: "All general slots",
       frac: (m) => m.peerGeneralFrac,
       caption: "All general slots: we assume that the payment is using the " +
         "full allocation of slots for this bucket.",
     },
     congestion: {
+      label: "Congestion bucket",
       frac: (m) => m.congestionSlotFrac,
       caption: "Congestion bucket: we assume that the payment is using a " +
         "single slot in the congestion bucket.",
     },
   };
+  const CELL_MODE_ORDER = ["generalSlot", "general", "congestion"];
 
   const cellMode = () => CELL_MODES[state.tab] || CELL_MODES.general;
 
@@ -276,17 +280,48 @@
     return tr;
   }
 
-  function renderTable(metrics) {
-    $("table-caption").textContent = cellMode().caption +
-      " Hover a cell for sat values; + adds a threshold row, × removes one.";
+  // The table's column groups, each a label and the frac its cells use.
+  //
+  // Under fixed slots every channel type has the same 30 general and 10
+  // congestion slots, so the per-type groups are three copies of one column.
+  // The axis that does vary is which bucket the payment uses, so that becomes
+  // the grouping and all three buckets are readable at once. Under percentage
+  // slots the buckets scale with max_accepted_htlcs, the types genuinely
+  // differ, and one bucket at a time is the only way to show them.
+  function columnGroups(metrics) {
+    if (state.slotMode !== "fixed") {
+      return metrics.map((m) => ({
+        label: fmtInt(m.maxAcceptedHtlcs) + " slots",
+        frac: cellFrac(m),
+      }));
+    }
+    const m = metrics[0];
+    return CELL_MODE_ORDER.map((key) => ({
+      label: CELL_MODES[key].label,
+      frac: CELL_MODES[key].frac(m),
+    }));
+  }
 
+  function renderTable(metrics) {
+    const fixed = state.slotMode === "fixed";
+    $("table-caption").textContent = (fixed
+      ? "Fixed slot counts do not scale with max_accepted_htlcs, so every " +
+        "channel type gives the same figures; the columns are the buckets " +
+        "instead."
+      : cellMode().caption) +
+      " Hover a cell for sat values; + adds a threshold row, × removes one.";
+    // The bucket tabs pick one column group under percentage slots; under
+    // fixed slots all three are on screen, so there is nothing to pick.
+    $("bucket-tabs").classList.toggle("hidden", fixed);
+
+    const groups = columnGroups(metrics);
     const table = el("table");
     const thead = el("thead");
 
     const row1 = el("tr");
     row1.appendChild(el("th"));
-    for (const m of metrics) {
-      const th = el("th", "type-head group-start", fmtInt(m.maxAcceptedHtlcs) + " slots");
+    for (const g of groups) {
+      const th = el("th", "type-head group-start", g.label);
       th.colSpan = state.prices.length;
       row1.appendChild(th);
     }
@@ -297,7 +332,7 @@
 
     const row2 = el("tr");
     row2.appendChild(el("th", "row-head", "Threshold"));
-    for (let g = 0; g < metrics.length; g++) {
+    for (let g = 0; g < groups.length; g++) {
       prices.forEach((p, i) => {
         row2.appendChild(el("th", "price-head" + (i === 0 ? " group-start" : ""),
           "@ $" + compactUsd(p)));
@@ -310,8 +345,8 @@
     for (const t of thresholds) {
       const tr = el("tr");
       tr.appendChild(thresholdHead(t));
-      for (const m of metrics) {
-        const frac = cellFrac(m);
+      for (const group of groups) {
+        const frac = group.frac;
         prices.forEach((p, i) => {
           const td = el("td", i === 0 ? "group-start" : null);
           if (!(frac > 0)) {
@@ -332,7 +367,7 @@
       }
       tbody.appendChild(tr);
     }
-    tbody.appendChild(thresholdAddRow(metrics.length * prices.length));
+    tbody.appendChild(thresholdAddRow(groups.length * prices.length));
     table.appendChild(tbody);
     $("table-wrap").replaceChildren(table);
   }
