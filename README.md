@@ -89,64 +89,105 @@ exits non-zero on the command line.
   percentile, so p10 greys and p25 stays. `analyze_buckets.py` marks the same
   rows `(filtered)`.
 
-- **General routability**: the other three sections ask what a single channel
-  can carry. This one asks whether a payment gets all the way across, by
-  routing between real node pairs. Nodes are banded by their largest advertised
-  `max_htlc` against the **same whole-graph percentiles** the table above
-  prints — `edge` to p25 (125,000 sat), `periphery` to p80 (5,630,259 sat),
-  `core` above it — and each cell of the 3×3 heatmap is the share of pairs
-  that can still pay each other once the general bucket's allocation applies to
-  every channel the payment is forwarded over. Hover a cell for the
-  unrestricted figure beside it, the gap between them, the pair count and the
-  median hop count. The payment size is a dropdown; the bucket tab picks a
-  single general slot or a peer's whole allocation.
+- **General routability**: the other three sections ask what a channel can
+  carry in the abstract. This one asks what real payments ask of it, by routing
+  between node pairs drawn at random and reading the demand off the routes.
+
+  Rows are **channels**, banded by their own advertised `max_htlc` against the
+  **same whole-graph percentiles** the table above prints — `≤ p10`,
+  `p10–p25` … `> p99`. Each cell carries two figures: large, the share of those
+  channels that can forward what the payment asks of them once the general
+  bucket's allocation applies; underneath in small type, the share that could
+  with no bucket at all. **The gap between the two is what the proposal costs.**
+  A low pair of figures is the graph's doing; a wide gap is the bucket's. Hover
+  a cell for the channel count, the number of forwarding attempts behind it and
+  the average amount asked.
+
+  The last row leaves the channels and asks whether the payment gets all the
+  way across: the share of sampled sender/receiver pairs that still find a
+  route once every hop they forward over is held to its allocation.
+
+  The payment size is a dropdown. Columns follow the distribution table's rule —
+  the two general buckets under fixed slots, the channel types under percentage
+  slots with the tab row picking the bucket.
+
+  At the default settings the table says something quite sharp. A $50 payment
+  is 66,667 sat; one general slot of a 30-slot bucket is 1.33% of a channel, so
+  it takes a 5 M sat channel to clear it and **every band up to p75 reads
+  0.0%** — against 99.9–100% unrestricted. A peer's whole allocation is 6.67%,
+  which needs 1 M sat, and the p50–p75 band jumps to 99.8%. End to end, 96.8%
+  of sampled pairs can pay each other today, 59.8% can through a whole general
+  allocation and 26.8% through a single general slot.
 
   Because the band thresholds come off the whole graph they do not move with
   the filter, so two settings stay comparable — the filter empties a band from
   below rather than redrawing where it sits. The default 100,000 sat floor
-  lands just under p25, which takes the edge band from 2,387 nodes to 121; a
-  1 M floor empties it entirely and the row and column go `n/a`. That is the
-  finding rather than a fault: the filter removes precisely the class of node
-  the edge band is about. It also makes the bucket nearly free at that floor —
-  periphery→periphery is 49.3% against an unrestricted 49.4% — because every
-  channel still standing is large enough for the allocation not to bind.
+  empties `≤ p10` outright and leaves 658 of the p10–p25 band; emptied rows grey
+  out, exactly as in the percentile table. That is the finding rather than a
+  fault: the filter removes precisely the channels that could not forward
+  anything once restricted.
 
 ## How routability is computed
 
-Routes are found the way a sender finds them: hops that cannot carry the amount
-are dropped first, and the cheapest of what survives wins. A pair counts as
-routable if **any** route survives, so the figure is about whether the network
-can still carry the payment, not whether one particular path happened to hold.
+**Senders and destinations are drawn at random** from the nodes the filter
+leaves standing — a node with no channel at or above the floor has nothing the
+page considers usable, so it is out of the sample as a sender, as a receiver and
+as somewhere a route could pass through. The two pools differ: a sender needs a
+channel it can send over and a destination one it can be paid over, and 16,475
+disabled directions mean plenty of nodes have only the one. At the default floor
+that is 5,936 nodes that can send and 4,493 that can be paid.
+
+The sample is drawn by hashing each node's own index and keeping the lowest
+scores. A node's place in it therefore does not depend on which other nodes are
+eligible, so moving the filter adds and removes members rather than redrawing
+the sample, and the figures slide rather than jump.
+
+Routes are found **the way a sender finds them**: LND's weighting, minimising
+fee plus a penalty on each hop's time lock (`amt × cltv_delta × 15 / 1e9` msat),
+over hops that will accept the amount — inside `min_htlc` and `max_htlc`, above
+the filter, and within 20 hops, which is enforced while searching rather than
+applied to the winner afterwards.
 
 The search runs **backwards from the destination**, because fees accumulate
 towards the sender: the amount that must flow over a hop is what its far end
 needs plus the fee the near end charges to forward it. One such search answers
-for every possible sender at once, which is why senders are not sampled at all —
-every node in a row's band is scored. Only destinations are sampled, 100 per
-band on the page and 30 on the command line.
+for every possible sender at once, which is why senders are nearly free and
+destinations are what set the cost.
 
-The destination count is what sets the precision. Reachability is close to
-all-or-nothing per destination — either a node has a channel big enough to be
-paid over or nobody can reach it — so a cell is really an average over
-destinations however many senders each is scored against. Ten destinations
-quantised every cell to a multiple of 10%; a hundred lands within a couple of
-points of where four hundred does. The sample itself is taken at fixed
-fractional positions in the rank-sorted band rather than redrawn each time, so
-dragging the filter slides the sample through the band instead of jumping it
-between unrelated nodes.
+**What a channel is asked to forward** is the payment plus every fee charged
+downstream of it, read straight off that search. So a channel deep in the
+network is asked for more than one sitting beside the destination, which is the
+whole reason this section routes rather than reading a distribution. A channel
+`u → v` counts an attempt for every sampled destination `v` can reach inside the
+hop cap; where it cannot, nothing downstream works and the channel's own size is
+not what the payment failed on. Every channel is scored against every
+destination, so a band's figure is both "share of attempts" and "mean over
+channels of the share of destinations it can serve" — which is what lets the
+cell be read as a share of channels.
 
-**The sender's own first channel is not restricted.** The bucket applies where
-a node *forwards*, and the sender forwards nothing, so on `s → n₁ → n₂ → d` the
-constrained channels are `(n₁,n₂)` and `(n₂,d)`. A pair that are already direct
-peers has no constrained channel at all.
+The demand is measured **unrestricted** for both figures in a cell. Under the
+bucket a payment might reroute and be asked for slightly more; holding the
+demand fixed is what makes the two figures differ by the bucket alone rather
+than by the bucket plus a change of route.
 
-Two caveats specific to this section, both stated on the page. It routes over a
+**The sender's own first channel is not restricted**, in the end-to-end row. The
+bucket applies where a node *forwards*, and the sender forwards nothing, so on
+`s → n₁ → n₂ → d` the constrained channels are `(n₁,n₂)` and `(n₂,d)`. A pair
+that are already direct peers has no constrained channel at all.
+
+The band rows need very little sampling — every surviving channel is scored
+against every destination, so a cell averages millions of attempts and is steady
+to a tenth of a point by forty destinations. It is the end-to-end row that wants
+them, because reachability is close to all-or-nothing per destination: either a
+node can be paid or nobody can reach it, whichever sender is asked. That row
+still moves by three points at a hundred destinations and settles by 150, which
+is what the page uses, at ~500 ms. The command line takes 30 by default, and 400
+senders on the page against 200 there.
+
+One caveat specific to this section, stated on the page. It routes over a
 **strict subset** of the edges the rest of the page counts: a direction is only
 in the routing graph if it gossiped a policy and is not `disabled`, which is
-60,162 of the 96,808 directions the filter reports on. And the 20-hop limit is
-applied by finding the cheapest route and dropping it if it runs long, rather
-than searching for the cheapest route *within* 20 hops — base fees keep cheap
-routes short, so the two should rarely differ.
+60,162 of the 96,808 directions the filter reports on.
 
 ## Filtering
 
@@ -228,15 +269,16 @@ All the page's controls are flags (`--general-pct`, `--congestion-pct`,
 `--general-slots`, `--congestion-slots`, `--channel-types`, `--min-slots`,
 `--alloc-pct`, `--min-max-htlc`, `--prices`, `--thresholds`, `--percentiles`,
 `--current-price`, `--percentile-type`, `--payment-usd`, `--route-dests`,
-`--route-seed`);
+`--route-senders`);
 `--csv PATH` dumps every cell for further plotting. Defaults match the page, so
 a bare run reproduces the example screenshots above. It reads the graph dump
 directly rather than `data.js`.
 
-The routability heatmap is the only table that walks the graph, and it is most
-of the run's few seconds; `--no-routability` skips it. Its `--route-dests`
-defaults to 30 against the page's 100, which is what keeps a bare run quick —
-raise it to match the page exactly.
+The routability table is the only one that walks the graph, and it is most of
+the run's few seconds; `--no-routability` skips it. Its `--route-dests` defaults
+to 30 against the page's 150, which is what keeps a bare run quick. The band
+rows land on the page's figures either way; it is the end-to-end row that wants
+destinations, so raise it to match the page exactly.
 
 ## Regenerate the data
 
@@ -248,10 +290,14 @@ python3 build_data.py mainnet.json --output data.js --graph-output graph.js
 ```
 
 `data.js` (152 KB) is the per-direction histogram of advertised `max_htlc` that
-drives the first three sections. `graph.js` (1.2 MB, 389 KB gzipped) is the
+drives the first three sections. `graph.js` (1.5 MB, 299 KB gzipped) is the
 topology the routability section routes over, in CSR form — `off[]` indexing
-into `to[]`/`maxHtlc[]`/`baseMsat[]`/`ppm[]`, node indices only, no pubkeys,
-since nothing on the page names a node. It is deliberately a smaller set of
+into `to[]`/`maxHtlc[]`/`minHtlc[]`/`baseMsat[]`/`ppm[]`/`cltv[]`, node indices
+only, no pubkeys, since nothing on the page names a node. `min_htlc` and
+`cltv_expiry_delta` are in there because the section routes the way a sender
+routes: a hop is only usable if the amount is inside both of its advertised
+bounds, and the cheapest route weighs fee against time lock rather than fee
+alone. It is deliberately a smaller set of
 directions than the histogram, for the reason given above. Every script tag is
 `defer`red, so the topology stays off the parse path without disturbing the
 order the files load in.

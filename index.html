@@ -161,29 +161,29 @@
       <summary class="results-head">General routability</summary>
       <div class="section-intro">
         <p>
-	  The tables above ask what a single channel can carry. This one asks
-	  whether a payment gets all the way across. Nodes are banded by their
-	  largest advertised <code>max_htlc</code>, read against the same
-	  percentiles the table above prints: <strong>edge</strong> up to the
-	  25th, <strong>periphery</strong> to the 80th, <strong>core</strong>
-	  above it. Each cell is the share of pairs that can still pay each other
-	  once the general bucket's allocation applies to every channel the
-	  payment is forwarded over.
+	  The tables above ask what a channel can carry in the abstract. This
+	  one asks what real payments ask of it. Senders and destinations are
+	  drawn at random from the nodes the filter leaves standing, routed
+	  between the way a sender would route, and every channel on the way is
+	  asked whether it could forward what the payment needs — which is not
+	  the payment itself but the payment plus every fee charged downstream
+	  of it.
         </p>
         <p>
-	  Routes are found the way a sender finds them: hops that cannot carry
-	  the amount are dropped first, then the cheapest of what is left wins.
-	  A pair counts as routable if any route survives. The sender's own
-	  first channel is not restricted, because the bucket applies where a
-	  node <em>forwards</em> and the sender forwards nothing.
+	  Rows are channels, banded by their own advertised
+	  <code>max_htlc</code> against the same whole-graph percentiles the
+	  table above prints. The large figure in each cell is the share that
+	  can forward through the general bucket; the small figure underneath is
+	  the share that could with no bucket at all. The gap between them is
+	  what the proposal costs — a low pair of figures is the graph's doing,
+	  a wide gap is the bucket's.
         </p>
         <p>
-	  The percentiles are over the <strong>whole</strong> graph, exactly as
-	  above, so the bands sit at fixed sat thresholds and two filter
-	  settings stay comparable. Raising the filter therefore empties a band
-	  from below rather than moving it: the default floor of 100,000 sat
-	  sits just under the 25th percentile, so it takes nearly all of the
-	  edge band with it. That is the finding, not a fault in the table.
+	  The last row leaves the channels and asks whether the payment gets all
+	  the way across: the share of sampled sender/receiver pairs that still
+	  find a route once every forwarded hop is held to its allocation. The
+	  sender's own first channel is exempt, because the bucket applies where
+	  a node <em>forwards</em> and the sender forwards nothing.
         </p>
       </div>
       <div class="tabs" id="route-tabs" role="tablist">
@@ -203,16 +203,24 @@
 	  smaller graph than that one describes.
           </li>
         <li>
-          <strong>Direct peers are included.</strong> A pair that already shares
-	  a channel has no forwarding node, so the bucket never applies and it
-	  is close to an automatic success. This flatters the core, which is
-	  directly connected to a great deal of the graph.
+          <strong>One route per pair.</strong> We take the route a sender's
+	  pathfinding would pick — cheapest by fee and time lock, within 20 hops
+	  — and hold it to the bucket. A real sender that fails retries
+	  elsewhere, so the end-to-end row is a lower bound on what eventually
+	  gets through.
           </li>
         <li>
-          <strong>The hop limit is applied after the fact.</strong> We find the
-	  cheapest route and drop it if it runs past 20 hops, rather than
-	  searching for the cheapest route within 20 hops. Base fees keep cheap
-	  routes short, so the two should rarely differ.
+          <strong>Direct peers are included.</strong> A pair that already shares
+	  a channel has no forwarding node, so the bucket never applies and it
+	  is close to an automatic success in the end-to-end row. This flatters
+	  the well-connected, which is most of the graph's payment volume.
+          </li>
+        <li>
+          <strong>The demand is measured unrestricted.</strong> What a channel
+	  is asked to forward comes off today's cheapest route. Under the bucket
+	  a payment might reroute and be asked for slightly more, so the two
+	  figures in a cell differ by the bucket alone rather than by the bucket
+	  plus a change of route.
           </li>
         <li>
           <strong>Advertised liquidity, not actual.</strong> As everywhere on

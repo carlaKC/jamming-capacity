@@ -138,29 +138,33 @@ ok(M.percentileSat(M.makeCdf(M.filterHist([[100, 3], [200, 5], [300, 2]], 200)),
 
 // --- routing over the real graph -------------------------------------------
 
-// Builds a CSR graph from [from, to, maxHtlc, baseMsat, ppm] rows, the same
-// shape build_data.py emits. Rows may be given in any order.
+// Builds a CSR graph from [from, to, maxHtlc, baseMsat, ppm, minHtlc, cltv]
+// rows, the same shape build_data.py emits. The last three default to zero --
+// a free hop with no floor and no time lock. Rows may be given in any order.
 function csr(n, rows) {
   const sorted = [...rows].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const off = new Array(n + 1).fill(0);
   for (const [u] of sorted) off[u + 1]++;
   for (let i = 0; i < n; i++) off[i + 1] += off[i];
+  const col = (i) => sorted.map((r) => r[i] || 0);
   return {
     n, off,
     to: sorted.map((r) => r[1]),
-    maxHtlc: sorted.map((r) => r[2]),
-    baseMsat: sorted.map((r) => r[3]),
-    ppm: sorted.map((r) => r[4]),
+    maxHtlc: col(2),
+    baseMsat: col(3),
+    ppm: col(4),
+    minHtlc: col(5),
+    cltv: col(6),
   };
 }
 
 // A line: 0 -> 1 -> 2 -> 3, plus a fat shortcut 0 -> 3 and a return leg.
 const LINE = csr(4, [
-  [0, 1, 1000, 0, 0],
-  [1, 2, 1000, 0, 0],
-  [2, 3, 1000, 0, 0],
-  [0, 3, 10, 0, 0],
-  [3, 2, 500, 0, 0],
+  [0, 1, 1000],
+  [1, 2, 1000],
+  [2, 3, 1000],
+  [0, 3, 10],
+  [3, 2, 500],
 ]);
 
 // --- reverseGraph: the incoming-edge view, offsets and payload intact.
@@ -173,6 +177,26 @@ eq(Array.from(rev.from.slice(rev.off[3], rev.off[4])).sort(), [0, 2], "3's in-ed
 const shortcut = rev.off[3] + Array.from(rev.from.slice(rev.off[3], rev.off[4])).indexOf(0);
 eq(rev.maxHtlc[shortcut], 10, "reverse carries the edge's max_htlc, not its peer's");
 eq(rev.off[0], rev.off[1], "node 0 has no in-edges");
+{
+  const r = M.reverseGraph(csr(2, [[0, 1, 1000, 5, 6, 7, 8]]));
+  eq([r.maxHtlc[0], r.baseMsat[0], r.ppm[0], r.minHtlc[0], r.cltv[0]],
+    [1000, 5, 6, 7, 8], "reverse carries every policy field a search reads");
+}
+
+// --- hopWeight: LND's fee plus its penalty on the time lock.
+// 1000 sat over a 1 sat + 100 ppm hop is 1000 + 100 = 1100 msat of fee; a 144
+// block delta adds 1000 * 1000 msat * 144 * 15 / 1e9 = 2.16 msat.
+approx(M.hopWeight(1000, 100, 0, 1000), 1100, 1e-9, "no time lock, no penalty");
+approx(M.hopWeight(1000, 100, 144, 1000), 1100 + 2.16, 1e-9, "144 blocks of risk");
+ok(M.hopWeight(0, 0, 144, 1000) > 0, "a free hop still costs its time lock");
+
+// --- hopAdmits: the three things that stop a direction forwarding an amount.
+ok(M.hopAdmits(1000, 0, 1000, 1, 0), "exactly at max_htlc clears");
+ok(!M.hopAdmits(1000, 0, 1001, 1, 0), "one sat over does not");
+ok(!M.hopAdmits(1000, 500, 400, 1, 0), "under min_htlc is refused");
+ok(M.hopAdmits(1000, 500, 500, 1, 0), "exactly at min_htlc clears");
+ok(!M.hopAdmits(1000, 0, 500, 0.1, 0), "the bucket admits a tenth of max_htlc");
+ok(!M.hopAdmits(1000, 0, 10, 1, 5000), "below the page's filter, whatever it can carry");
 
 // --- routeCosts: reachability and the amount that must flow over each hop.
 // Unrestricted (frac 1, no filter), 5 sat fits every hop including the
@@ -205,11 +229,23 @@ eq(rev.off[0], rev.off[1], "node 0 has no in-edges");
   ok(!isFinite(M.routeCosts(rev, 3, 5, 1, 2000).amt[0]),
     "a floor above every channel disconnects the graph");
 }
+// A direction that will not accept the amount at its lower bound is no more
+// use than one too small to hold it. 0 -> 3 sets a 50-sat floor, so a 5-sat
+// payment goes the long way even though the channel is fat enough.
+{
+  const g = csr(4, [
+    [0, 1, 1000], [1, 2, 1000], [2, 3, 1000], [0, 3, 1000, 0, 0, 50],
+  ]);
+  const r = M.routeCosts(M.reverseGraph(g), 3, 5, 1, 0);
+  eq(r.hops[0], 3, "min_htlc keeps the shortcut out of a small payment's route");
+  eq(M.routeCosts(M.reverseGraph(g), 3, 50, 1, 0).hops[0], 1,
+    "at the floor itself the shortcut is back");
+}
 
 // --- fees accumulate towards the sender, and steer the route.
 // 0 -> 1 -> 2: node 1 charges 1 sat base + 1% to forward.
 const FEES = csr(3, [
-  [0, 1, 100000, 0, 0],
+  [0, 1, 100000],
   [1, 2, 100000, 1000, 10000],
 ]);
 {
@@ -221,27 +257,39 @@ const FEES = csr(3, [
 }
 // Given two ways round, the cheapest wins even when it is longer.
 const CHOICE = csr(4, [
-  [0, 1, 100000, 0, 0],
+  [0, 1, 100000],
   [1, 3, 100000, 50000, 0],   // one hop, 50 sat base
-  [0, 2, 100000, 0, 0],
+  [0, 2, 100000],
   [2, 3, 100000, 1000, 0],    // the same length, 1 sat base
 ]);
 {
   const r = M.routeCosts(M.reverseGraph(CHOICE), 3, 1000, 1, 0);
   eq(r.amt[0], 1001, "0 routes via the 1-sat hop, not the 50-sat one");
 }
+// Fees being equal, the route asking for less of the sender's time wins --
+// which is what makes this the route a sender picks rather than the cheapest.
+{
+  const g = csr(4, [
+    [0, 1, 10000000], [1, 3, 10000000, 1000, 0, 0, 2016],
+    [0, 2, 10000000], [2, 3, 10000000, 1000, 0, 0, 40],
+  ]);
+  const r = M.routeCosts(M.reverseGraph(g), 3, 1000000, 1, 0);
+  eq(r.hops[0], 2, "both ways are two hops and cost the same in fees");
+  ok(r.dist[2] < r.dist[1], "the 40-block hop weighs less than the 2016-block one");
+  eq(r.amt[0], r.amt[2], "so the sender is routed through 2");
+}
 
 // --- sourceResults: the sender's own first hop is not bucket-constrained.
 // 0 -> 1 -> 2, both channels 1000 sat, bucket at 10%. The 1 -> 2 hop must fit
 // inside 100 sat, but 0 -> 1 only has to fit inside the raw 1000.
 const FIRST = csr(3, [
-  [0, 1, 1000, 0, 0],
-  [1, 2, 1000, 0, 0],
+  [0, 1, 1000],
+  [1, 2, 1000],
 ]);
 {
   const g = FIRST;
   const r = M.routeCosts(M.reverseGraph(g), 2, 100, 0.1, 0);
-  const s = M.sourceResults(g, 2, r, 0, M.MAX_HOPS);
+  const s = M.sourceResults(g, 2, r, 0);
   eq(s.ok[0], 1, "0 pays 2: its first hop is exempt, the forwarding hop fits");
   eq(s.hops[0], 2, "over two hops");
   eq(s.ok[1], 1, "1 pays 2 directly");
@@ -253,100 +301,172 @@ const FIRST = csr(3, [
 {
   const g = FIRST;
   const r = M.routeCosts(M.reverseGraph(g), 2, 101, 0.1, 0);
-  const s = M.sourceResults(g, 2, r, 0, M.MAX_HOPS);
+  const s = M.sourceResults(g, 2, r, 0);
   eq(s.ok[0], 0, "the forwarding hop is one sat short");
   eq(s.ok[1], 1, "the direct pair still clears: no hop is constrained");
 }
 // The first hop is exempt from the bucket but not from its own max_htlc.
 {
-  const g = csr(3, [[0, 1, 120, 0, 0], [1, 2, 100000, 0, 0]]);
+  const g = csr(3, [[0, 1, 120], [1, 2, 100000]]);
   const r = M.routeCosts(M.reverseGraph(g), 2, 100, 0.1, 0);
-  eq(M.sourceResults(g, 2, r, 0, M.MAX_HOPS).ok[0], 1, "120 sat carries 100");
+  eq(M.sourceResults(g, 2, r, 0).ok[0], 1, "120 sat carries 100");
   const r2 = M.routeCosts(M.reverseGraph(g), 2, 130, 0.1, 0);
-  eq(M.sourceResults(g, 2, r2, 0, M.MAX_HOPS).ok[0], 0,
+  eq(M.sourceResults(g, 2, r2, 0).ok[0], 0,
     "the first hop still has to fit the amount in its raw max_htlc");
 }
+// Nor from its own min_htlc: the sender is exempt from the bucket, not from
+// what its peer will accept.
+{
+  const g = csr(3, [[0, 1, 100000, 0, 0, 500], [1, 2, 100000]]);
+  const r = M.routeCosts(M.reverseGraph(g), 2, 100, 1, 0);
+  eq(M.sourceResults(g, 2, r, 0).ok[0], 0, "100 sat is under the first hop's floor");
+}
 
-// --- the hop cap drops pairs whose cheapest route is too long.
+// --- the hop cap is enforced while searching, not applied to the winner.
 {
   const rows = [];
-  for (let i = 0; i < 25; i++) rows.push([i, i + 1, 100000, 0, 0]);
+  for (let i = 0; i < 25; i++) rows.push([i, i + 1, 100000]);
   const chain = csr(26, rows);
   const r = M.routeCosts(M.reverseGraph(chain), 25, 100, 1, 0);
-  eq(r.hops[0], 25, "the chain is 25 hops end to end");
-  const s = M.sourceResults(chain, 25, r, 0, M.MAX_HOPS);
-  eq(s.ok[0], 0, "25 hops is past the 20-hop cap");
-  eq(s.ok[5], 1, "20 hops is not");
+  eq(r.hops[5], 20, "5 is 20 hops from the end, which is the cap");
+  eq(r.hops[4], -1, "21 hops is past it, so the search never labels 4");
+  ok(!isFinite(r.amt[0]), "and nothing beyond that is reached at all");
+  const s = M.sourceResults(chain, 25, r, 0);
+  eq(s.ok[5], 1, "a 20-hop route is one a sender would build");
   eq(s.hops[5], 20, "and is reported as such");
-  eq(s.ok[4], 0, "21 hops is");
+  eq(s.ok[4], 0, "a 21-hop one is not");
+  eq(s.ok[0], 0, "nor is the whole 25-hop chain");
 }
 
-// --- nodePeak: the largest outbound max_htlc that survives the filter.
-{
-  const g = csr(3, [
-    [0, 1, 1000, 0, 0],
-    [0, 2, 200, 0, 0],
-    [1, 0, 5000, 0, 0],
-  ]);
-  eq(Array.from(M.nodePeak(g, 0)), [1000, 5000, 0],
-    "the largest channel, not the sum: the bands are a single-channel scale");
-  eq(Array.from(M.nodePeak(g, 500)), [1000, 5000, 0], "the 200-sat edge was never the peak");
-  eq(Array.from(M.nodePeak(g, 1500)), [0, 5000, 0], "the filter can take a node's only usable edge");
-  eq(M.nodePeak(g, 0)[2], 0, "a node with no outbound direction cannot originate");
-}
-
-// --- bandNodes: fixed sat thresholds, boundaries falling to the lower band.
-// The thresholds are the page's whole-graph edge percentiles, so they do not
-// move with the filter.
-{
-  const peak = Float64Array.from([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 0]);
-  const { groups, total } = M.bandNodes(peak, [30, 80]);
-  eq(total, 10, "the node with no surviving edge is not in the population");
-  eq(groups[0], [0, 1, 2], "edge: up to and including the p25 threshold");
-  eq(groups[1], [3, 4, 5, 6, 7], "periphery: above it, up to and including p80");
-  eq(groups[2], [8, 9], "core: above p80");
-  eq(groups[0].concat(groups[1], groups[2]).length, total, "every node lands in one band");
-  ok(peak[groups[0][0]] <= peak[groups[0][2]], "bands come back sorted");
-}
-// Raising the filter empties a band from below rather than redrawing where the
-// bands sit -- which is the point of taking the thresholds off the whole graph.
+// --- eligibleNodes: what the filter leaves standing, in each direction.
 {
   const g = csr(4, [
-    [0, 1, 100, 0, 0],
-    [1, 2, 5000, 0, 0],
-    [2, 3, 9000000, 0, 0],
-    [3, 0, 9000000, 0, 0],
+    [0, 1, 1000],
+    [1, 0, 1000],
+    [2, 3, 200],     // 2 and 3 share nothing but a small channel
+    [3, 2, 200],
   ]);
-  const wide = M.bandNodes(M.nodePeak(g, 0), [125000, 5630259]);
-  eq(wide.groups.map((b) => b.length), [2, 0, 2], "unfiltered: two small, two large");
-  const tight = M.bandNodes(M.nodePeak(g, 125000), [125000, 5630259]);
-  eq(tight.groups.map((b) => b.length), [0, 0, 2],
-    "a floor at the p25 threshold empties the band below it, leaving the rest put");
-  eq(tight.total, 2, "and the emptied nodes leave the population entirely");
+  eq(M.eligibleNodes(g, 0), [0, 1, 2, 3], "no filter keeps everyone");
+  eq(M.eligibleNodes(g, 500), [0, 1],
+    "a node whose every channel is under the floor is out of the sample");
+  eq(M.eligibleNodes(g, 5000), [], "a floor above the graph leaves nobody");
 }
-// Ties on a threshold go downwards, whole.
+// Which view is handed in is the difference between "can send" and "can be
+// paid" -- a node with only an inbound channel is a destination and not a
+// sender, and sampling it as one would only add pairs that cannot exist.
 {
-  const peak = Float64Array.from([5, 5, 5, 9]);
-  const { groups } = M.bandNodes(peak, [5, 8]);
-  eq(groups[0].length, 3, "every node exactly on the threshold falls to the lower band");
-  eq(groups[1].length, 0, "which can leave the band above it empty");
-  eq(groups[2], [3], "and only the node past the upper threshold");
+  const g = csr(2, [[0, 1, 1000]]);
+  eq(M.eligibleNodes(g, 0), [0], "only 0 has an outbound channel");
+  eq(M.eligibleNodes(M.reverseGraph(g), 0), [1], "only 1 has an inbound one");
 }
-ok(M.bandNodes(Float64Array.from([0, 0]), [25, 80]).groups.every((g) => !g.length),
-  "no candidates gives empty bands rather than throwing");
 
-// --- pickByFraction: stable positions in a rank-sorted band.
+// --- sampleNodes: a random subset that survives the pool changing.
 {
-  const band = [11, 22, 33, 44, 55, 66, 77, 88, 99, 110];
-  eq(M.pickByFraction(band, [0, 0.5, 0.99]), [11, 66, 110], "position, not value");
-  // The same fractions over a band that has shrunk pick neighbours of the old
-  // choice rather than an unrelated sample -- which is what keeps the figures
-  // steady while the filter is dragged.
-  eq(M.pickByFraction(band.slice(0, 5), [0, 0.5, 0.99]), [11, 33, 55], "shrunk band");
-  eq(M.pickByFraction([7, 8], [0.1, 0.2, 0.3]), [7], "collisions deduplicate");
-  eq(M.pickByFraction([], [0.5]), [], "an empty band picks nothing");
+  const pool = [];
+  for (let i = 0; i < 200; i++) pool.push(i);
+  const pick = M.sampleNodes(pool, 20, 7);
+  eq(pick.length, 20, "the requested count comes back");
+  eq(pick, M.sampleNodes(pool, 20, 7), "seeded, so a reload lands on the same sample");
+  ok(pick.join() !== M.sampleNodes(pool, 20, 8).join(), "a different seed picks differently");
+  ok(new Set(pick).size === pick.length, "without replacement");
+  // Spread across the pool rather than clustered at one end: the sample is by
+  // hash of the node's index, which is unrelated to its position.
+  between(pick.filter((u) => u >= 100).length, 4, 16, "both halves of the pool are drawn from");
+  // Halving the pool keeps every survivor that was already in the sample --
+  // which is what stops the figures jumping when the filter moves.
+  const shrunk = M.sampleNodes(pool.filter((u) => u < 100), 20, 7);
+  const kept = pick.filter((u) => u < 100);
+  ok(kept.every((u) => shrunk.includes(u)),
+    "a node's place in the sample does not depend on who else is eligible");
+  eq(M.sampleNodes([1, 2, 3], 20, 7), [1, 2, 3], "a pool smaller than the sample is taken whole");
+  eq(M.sampleNodes([], 5, 7), [], "an empty pool samples to nothing");
 }
-eq(M.sampleFractions(4, 7), M.sampleFractions(4, 7), "the sample is seeded, so it is stable");
-ok(M.sampleFractions(30, 1280).every((f) => f >= 0 && f < 1), "fractions are in [0, 1)");
+
+// --- bandIndex / bandChannelCounts: channels sorted by what they advertise.
+eq(M.bandIndex(10, [25, 80]), 0, "below the first threshold");
+eq(M.bandIndex(25, [25, 80]), 0, "exactly on a threshold falls to the lower band");
+eq(M.bandIndex(26, [25, 80]), 1, "just above it");
+eq(M.bandIndex(9000, [25, 80]), 2, "past the last threshold");
+eq(M.bandIndex(5, []), 0, "no thresholds is one band");
+{
+  const g = csr(3, [[0, 1, 10], [1, 2, 50], [2, 0, 9000], [0, 2, 20]]);
+  eq(Array.from(M.bandChannelCounts(g, 0, [25, 80])), [2, 1, 1], "every channel is counted once");
+  eq(Array.from(M.bandChannelCounts(g, 25, [25, 80])), [0, 1, 1],
+    "the filter empties a band from below rather than moving where it sits");
+  eq(Array.from(M.bandChannelCounts(g, 0, [])), [4], "one band holds the lot");
+}
+
+// --- tallyBands: what each channel is asked to forward, and whether it can.
+// 0 -> 1 -> 2 with 1000-sat channels, plus a 50-sat channel 3 -> 1 and a pair
+// (4 -> 5) with no path to the destination at all.
+const TALLY = csr(6, [
+  [0, 1, 1000],
+  [1, 2, 1000],
+  [3, 1, 50],
+  [4, 5, 1000],
+]);
+const TALLY_REV = M.reverseGraph(TALLY);
+function tally(amount, fracs, minSat, thresholds) {
+  const acc = M.emptyBandTally(thresholds.length + 1, fracs.length);
+  const base = M.routeCosts(TALLY_REV, 2, amount, 1, minSat);
+  M.tallyBands(TALLY, 2, base, fracs, minSat, thresholds, acc);
+  return {
+    attempts: Array.from(acc.attempts),
+    okBase: Array.from(acc.okBase),
+    okBucket: acc.okBucket.map((x) => Array.from(x)),
+    demand: Array.from(acc.demand),
+  };
+}
+{
+  const t = tally(100, [0.1, 0.05], 0, [60]);
+  eq(t.attempts, [1, 2],
+    "every channel with a path onwards is asked once; 4 -> 5 goes nowhere and is not");
+  eq(t.okBase, [0, 2], "the 50-sat channel cannot carry 100 sat even unrestricted");
+  eq(t.okBucket[0], [0, 2], "a tenth of 1000 is exactly 100, so both large channels clear");
+  eq(t.okBucket[1], [0, 0], "a twentieth is 50, and neither does");
+  eq(t.demand, [100, 200], "each attempt is asked for what its far end needs");
+}
+{
+  // One sat over what the allocation admits: the channels are unchanged and
+  // still carry it unrestricted, so the gap between the two figures is the
+  // bucket and nothing else.
+  const t = tally(101, [0.1], 0, [60]);
+  eq(t.okBase, [0, 2], "unrestricted, 1000 sat still carries 101");
+  eq(t.okBucket[0], [0, 0], "under the bucket neither clears");
+}
+{
+  // The destination never forwards to itself, so its own outbound channel is
+  // not an attempt -- 1 -> 2 is, 2 -> anything is not.
+  const g = csr(3, [[0, 1, 1000], [1, 2, 1000], [2, 1, 1000]]);
+  const acc = M.emptyBandTally(1, 1);
+  const base = M.routeCosts(M.reverseGraph(g), 2, 100, 1, 0);
+  M.tallyBands(g, 2, base, [1], 0, [], acc);
+  eq(Array.from(acc.attempts), [2], "the destination's own channels are not forwarding");
+}
+{
+  // A channel under the filter is absent, not failing: it is not asked at all.
+  const t = tally(100, [1], 60, [60]);
+  eq(t.attempts, [0, 2], "the 50-sat channel is below the floor and out of the table");
+}
+{
+  // A channel that will not accept the amount at its lower bound cannot
+  // forward it, however much room it has.
+  const g = csr(3, [[0, 1, 100000, 0, 0, 5000], [1, 2, 100000]]);
+  const acc = M.emptyBandTally(1, 1);
+  const base = M.routeCosts(M.reverseGraph(g), 2, 100, 1, 0);
+  M.tallyBands(g, 2, base, [1], 0, [], acc);
+  eq(Array.from(acc.attempts), [2], "both channels are asked");
+  eq(Array.from(acc.okBase), [1], "only the one whose min_htlc the amount clears can");
+}
+// Fees accumulate towards the sender, so a channel further out is asked for
+// more than one beside the destination -- the reason this routes at all.
+{
+  const g = csr(3, [[0, 1, 100000], [1, 2, 100000, 1000, 10000]]);
+  const acc = M.emptyBandTally(1, 1);
+  const base = M.routeCosts(M.reverseGraph(g), 2, 1000, 1, 0);
+  M.tallyBands(g, 2, base, [1], 0, [], acc);
+  eq(Array.from(acc.demand), [1000 + 1011],
+    "1 -> 2 is asked for the payment, 0 -> 1 for the payment plus 1's fee");
+}
 
 console.log(`math.test.js: ${passed} assertions passed`);

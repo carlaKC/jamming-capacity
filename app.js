@@ -798,7 +798,7 @@
   // it is handed the parameters it reads and decides for itself whether any of
   // them moved. Routing the whole graph is far too expensive to redo on every
   // keystroke in the Parameters row.
-  // The bands are cut at the same whole-graph percentiles the Channel
+  // Its channel bands are cut at the same whole-graph percentiles the Channel
   // percentiles table prints, so the two sections mean the same thing by
   // "p25". Fixed values, taken over FULL_CDF rather than the filtered one, so
   // moving the filter empties a band rather than moving where it sits.

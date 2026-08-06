@@ -21,7 +21,7 @@
   --sand: #E6DCCD;
   --stone: #F0EBE5;
   --error: #A85448;         /* burnt sienna */
-  --cell-rgb: 74, 90, 64;   /* deep moss — sequential ramp for the heatmap */
+  --cell-rgb: 74, 90, 64;   /* deep moss — sequential ramp for shaded cells */
   --shadow-soft: 0 4px 20px -2px rgba(93, 112, 82, 0.15);
   --shadow-lift: 0 10px 30px -8px rgba(93, 112, 82, 0.25);
   --serif: "Fraunces", Georgia, "Times New Roman", serif;
@@ -563,8 +563,8 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
 .caption-line { display: block; }
 .caption-line + .caption-line { margin-top: 5px; }
 
-/* A band header carries three lines -- name, sat range, node count -- so the
-   heatmap's axes explain themselves without a legend. */
+/* A band header carries three lines -- percentile range, sat range, channel
+   count -- so the rows explain themselves without a legend. */
 table.heat th.row-head, table.heat thead th { vertical-align: bottom; }
 table.heat thead th:not(.row-head) { text-align: right; }
 .band-name {
@@ -581,16 +581,35 @@ table.heat thead th:not(.row-head) { text-align: right; }
   color: var(--muted);
   white-space: nowrap;
 }
-table.heat tbody td {
+table.heat tbody td, table.heat tfoot td {
   font-size: 15px;
   font-weight: 700;
-  min-width: 96px;
+  min-width: 128px;
+}
+/* Two figures to a cell: what the bucket allows, and underneath it what the
+   same channels manage with no bucket at all. The second is the reference the
+   first is read against, so it is quieter but has to stay legible against a
+   dark fill -- it inherits the cell's colour rather than setting its own. */
+.cell-main { display: block; }
+.cell-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.72;
+  white-space: nowrap;
+}
+/* The end-to-end row answers a different question from the bands above it --
+   payments, not channels -- so it is set apart rather than read as one more
+   band. */
+table.route-table tfoot td, table.route-table tfoot th {
+  border-top: 2px solid var(--ink-2);
 }
 /* Routing the graph takes a moment. Fading rather than blanking keeps the
    previous figures readable, so the table does not jump while the filter is
    being dragged across it. */
 #route-wrap.is-busy { opacity: 0.45; transition: opacity 120ms ease; }
-#route-wrap td[data-from] { cursor: help; }
+#route-wrap td[data-band], #route-wrap td[data-end] { cursor: help; }
 
 /* ---- tooltip ---- */
 .tooltip {

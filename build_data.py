@@ -20,10 +20,16 @@ current dump that is 96,808 histogram directions against 60,162 routable ones,
 so the routability section reads a graph 38% smaller than the one the filter
 reports on. The page says so; the two numbers are not meant to agree.
 
-Topology ships in CSR form -- off[] indexing into to[]/max_htlc[]/base[]/ppm[]
--- because that is the adjacency list the browser needs, so there is no
-graph-building step in JS. Node indices only: nothing on the page names a node,
-and dropping pubkeys keeps the payload numeric (1.4 MB, 389 KB gzipped).
+Topology ships in CSR form -- off[] indexing into
+to[]/maxHtlc[]/minHtlc[]/baseMsat[]/ppm[]/cltv[] -- because that is the
+adjacency list the browser needs, so there is no graph-building step in JS.
+Node indices only: nothing on the page names a node, and dropping pubkeys keeps
+the payload numeric.
+
+min_htlc and cltv_expiry_delta are in there because the section routes the way a
+sender routes: a hop is only usable if the amount is inside both of its
+advertised bounds, and the cheapest route is the one weighing fee against time
+lock, not fee alone.
 
 Usage:
     python3 build_data.py mainnet.json --output data.js --graph-output graph.js
@@ -43,6 +49,8 @@ DIRECTIONS = (("node1_pub", "node2_pub", "node1_policy"),
 # Where an advertising direction sits relative to its channel capacity: the
 # median observed ratio, which 82% of directions are at or above.
 IMPUTE_RATIO = 0.99
+
+MSAT_PER_SAT = 1000
 
 def _int(value):
     try:
@@ -84,7 +92,8 @@ def parse_routing_graph(graph):
     """Return (csr, stats) over the directions that can actually forward.
 
     csr is a dict of parallel arrays in compressed-sparse-row order: off[u] and
-    off[u+1] bracket node u's outbound directions in to[]/max_htlc[]/base[]/ppm[].
+    off[u+1] bracket node u's outbound directions in
+    to[]/maxHtlc[]/minHtlc[]/baseMsat[]/ppm[]/cltv[].
 
     A node only gets an index if it appears on a routable direction, so nodes
     whose every channel is disabled or unadvertised drop out of the graph rather
@@ -117,9 +126,13 @@ def parse_routing_graph(graph):
             for pub in (u, v):
                 if pub not in index:
                     index[pub] = len(index)
-            dirs.append((index[u], index[v], sat,
+            # min_htlc rounds up: a direction advertising 1,500 msat will not
+            # forward 1 sat, so the sat floor it enforces is 2.
+            min_sat = -(-_int(policy.get("min_htlc")) // MSAT_PER_SAT)
+            dirs.append((index[u], index[v], sat, min_sat,
                          _int(policy.get("fee_base_msat")),
-                         _int(policy.get("fee_rate_milli_msat"))))
+                         _int(policy.get("fee_rate_milli_msat")),
+                         _int(policy.get("time_lock_delta"))))
 
     n = len(index)
     dirs.sort(key=lambda d: (d[0], d[1]))
@@ -134,8 +147,10 @@ def parse_routing_graph(graph):
         "off": off,
         "to": [d[1] for d in dirs],
         "maxHtlc": [d[2] for d in dirs],
-        "baseMsat": [d[3] for d in dirs],
-        "ppm": [d[4] for d in dirs],
+        "minHtlc": [d[3] for d in dirs],
+        "baseMsat": [d[4] for d in dirs],
+        "ppm": [d[5] for d in dirs],
+        "cltv": [d[6] for d in dirs],
     }
     stats = {"noPolicy": no_policy, "disabled": disabled, "noValue": no_value}
     return csr, stats
@@ -172,7 +187,8 @@ FIXTURE = {
         # and whether or not it could carry an HTLC.
         {"node1_pub": "A", "node2_pub": "B", "capacity": "1000000",
          "node1_policy": {"max_htlc_msat": "1500000", "fee_base_msat": "1000",
-                          "fee_rate_milli_msat": "100"},
+                          "fee_rate_milli_msat": "100", "min_htlc": "1500",
+                          "time_lock_delta": 144},
          "node2_policy": {"max_htlc_msat": "2000000", "fee_base_msat": "0",
                           "fee_rate_milli_msat": "1"}},
         {"node1_pub": "A", "node2_pub": "C", "capacity": "1000000",
@@ -233,9 +249,14 @@ def self_test():
     assert csr["to"][0:3] == [1, 2, 3], csr["to"]
     assert csr["maxHtlc"][0:3] == [1500, 1500, 3960000], csr["maxHtlc"]
     assert csr["baseMsat"][0] == 1000 and csr["ppm"][0] == 100, csr
+    # 1,500 msat rounds up to a 2 sat floor: the direction will not forward 1.
+    assert csr["minHtlc"][0] == 2 and csr["cltv"][0] == 144, csr
     # A direction with a policy but no fee fields reads as a zero-fee hop
     # rather than dropping out.
     assert csr["baseMsat"][1] == 0 and csr["ppm"][1] == 0, csr
+    # No min_htlc and no time_lock_delta advertised: no floor, no time-lock
+    # penalty, rather than the direction dropping out of the graph.
+    assert csr["minHtlc"][1] == 0 and csr["cltv"][1] == 0, csr
     # D keeps both directions; the disabled C->D is gone but D->C remains.
     assert csr["to"][4:6] == [0, 2], csr["to"]
     assert csr["maxHtlc"][4:6] == [3000, 800], csr["maxHtlc"]
