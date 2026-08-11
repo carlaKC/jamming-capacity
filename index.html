@@ -147,28 +147,19 @@
     <details class="result-section" open>
       <summary class="results-head">General routability</summary>
       <div class="section-intro">
-        <p>
-	  Each cell is a sender tier paying a destination tier, read down three
-	  rungs of the mitigation: the big figure holds every forwarded hop to
-	  its per-peer <em>slot allocation</em>; "in bucket" only asks the
-	  payment to fit inside the general bucket's liquidity share, with no
-	  slot division; "no mitigation" is the bare graph. The gap between
-	  the first two is what slot division costs, between the last two what
-	  the bucket itself costs. The sender's own first channel is exempt
-	  throughout, because the bucket applies where a node
-	  <em>forwards</em> and the sender forwards nothing.
-        </p>
-        <p>
-	  Channels under the threshold enforce no per-peer rules and admit up
-	  to the whole general bucket. Every advertising node lands in a tier;
-	  a route crosses whatever channels can carry the amount, whichever
-	  tier they belong to.
-        </p>
-      </div>
-      <div class="tabs" id="route-tabs" role="tablist">
-        <button type="button" class="tab" data-route-tab="generalSlot">Single general slot</button>
-        <button type="button" class="tab active" data-route-tab="general">All general slots</button>
-      </div>
+        <ul>
+          <li>
+	    Sort nodes by capacity: the total <code>max_htlc</code>
+	    advertised across all of a node's edges.
+          </li>
+          <li>
+	    Partition nodes by capacity percentiles, and randomly sample sources and destinations in each.
+          </li>
+          <li>
+	    Find the shortest path for each route, and determine whether the payment amount can be facilitated in the general bucket.
+          </li>
+        </ul>
+        </div>
       <div class="route-controls" id="route-controls"></div>
       <p class="table-caption" id="route-caption"></p>
       <div class="table-wrap" id="route-wrap"></div>

@@ -15,8 +15,8 @@
  * graph, where the router uses them only when they can carry the amount.
  *
  * All routing lives in math.js; this file owns the section's own state
- * (payment amount, bucket tab, channel type) and its rendering. app.js hands
- * it the current parameters on every render.
+ * (payment amount, channel type) and its rendering. app.js hands it the
+ * current parameters on every render.
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) module.exports = factory();
@@ -42,17 +42,8 @@
   const DEST_SEED = 1280;
   const SENDER_SEED = 8080;
 
-  // Which share of a channel's max_htlc the mitigation admits at an enforced
-  // hop. Only the general bucket is on offer here -- the section is about
-  // what routes without reputation.
-  const BUCKETS = {
-    generalSlot: { label: "Single general slot", frac: (m) => m.generalSlotFrac },
-    general: { label: "All general slots", frac: (m) => m.peerGeneralFrac },
-  };
-
   const state = {
     payUsd: DEFAULT_PAY_USD,
-    tab: "general",
     type: null,          // channel type under percentage slots
   };
 
@@ -131,8 +122,10 @@
     return state.type;
   }
 
-  const bucketDef = () => BUCKETS[state.tab] || BUCKETS.general;
-  const bucketFrac = () => bucketDef().frac(params.typeMetrics(chanType()));
+  // A payment succeeds if the general bucket can route it using any number
+  // of slots, so the mitigated figure holds each forwarded hop to the whole
+  // per-peer allocation -- k slots' worth of the general bucket.
+  const mitigatedFrac = () => params.typeMetrics(chanType()).peerGeneralFrac;
   const amountSat = () => M.usdToSat(state.payUsd, params.price);
 
   // ---------------- computation ----------------
@@ -152,7 +145,7 @@
     const exemptSat = params.minHtlcSat;
     const exemptFrac = params.exemptFrac;
     const amount = amountSat();
-    const frac = bucketFrac();
+    const frac = mitigatedFrac();
     const cells = emptyCells();
 
     for (let d = 0; d < N_TIERS; d++) {
@@ -279,31 +272,6 @@
     $("route-wrap").replaceChildren(table);
   }
 
-  function renderCaption(result) {
-    const parts = [
-      "Share of sampled payments of " + fmt.usd(state.payUsd) + " — " +
-      fmt.sat(Math.round(result.amount)) + " at " + fmt.usd(params.price) +
-      " / BTC — that still find a route once every forwarded hop is held to " +
-      bucketDef().label.toLowerCase() + " (" + fmt.pct(result.frac, 2) +
-      " of max_htlc). Underneath, the same share when a hop only has to fit " +
-      "the payment inside the whole general bucket (" +
-      fmt.pct(result.exemptFrac, 0) + " of max_htlc, no slot division), and " +
-      "with no mitigation at all — just the channel's advertised capacity." +
-      (result.exemptSat > 0
-        ? " Channels under " + fmt.compactSat(result.exemptSat) +
-          " sat enforce no per-peer rules and admit up to the whole general " +
-          "bucket — " + fmt.pct(result.exemptFrac, 0) + " of their max_htlc."
-        : ""),
-      "Tiers are cut by the total max_htlc a node advertises outward, over " +
-      "the " + fmt.int(result.counts.reduce((a, b) => a + b, 0)) +
-      " advertising nodes: edgelord p0–p15, edge p15–p25, periphery " +
-      "p25–p50, center p50–p75, core p75 and up. The sender's own first hop " +
-      "is exempt from the bucket, since the sender forwards nothing. Hover " +
-      "a cell for the counts behind it.",
-    ];
-    $("route-caption").replaceChildren(...parts.map((t) => el("span", "caption-line", t)));
-  }
-
   function field(labelText, control) {
     const label = el("label", "route-field");
     label.appendChild(el("span", "route-field-label", labelText));
@@ -373,12 +341,6 @@
     wrap.replaceChildren(...fields);
   }
 
-  function syncTabs() {
-    for (const btn of document.querySelectorAll("#route-tabs .tab")) {
-      btn.classList.toggle("active", btn.dataset.routeTab === state.tab);
-    }
-  }
-
   function setBusy(busy) {
     $("route-wrap").classList.toggle("is-busy", busy);
   }
@@ -395,7 +357,7 @@
     const hops = medianHops(cell.hops, cell.ok);
     const lines = [
       el("div", "tt-value", TIER_NAMES[s] + " pays " + TIER_NAMES[d]),
-      el("div", "tt-line", "slot allocation " + fmt.pct(share, 1)),
+      el("div", "tt-line", "per-peer allocation " + fmt.pct(share, 1)),
     ];
     if (lastResult.exemptFrac > 0) {
       lines.push(el("div", "tt-line", "whole general bucket " + fmt.pct(bucket, 1)));
@@ -423,12 +385,11 @@
   function schedule() {
     if (!mounted || !params) return;
     const key = [params.minHtlcSat, params.exemptFrac, params.price,
-      state.payUsd, params.slotMode, state.tab, chanType(), bucketFrac(),
+      state.payUsd, params.slotMode, chanType(), mitigatedFrac(),
     ].join("|");
     if (key === lastKey) return;
     lastKey = key;
     renderControls();
-    syncTabs();
     setBusy(true);
     // A filter drag fires continuously; each frame would otherwise start a
     // search that the next frame throws away.
@@ -442,7 +403,6 @@
     if (!result || id !== runId) return;
     lastResult = result;
     setBusy(false);
-    renderCaption(result);
     renderTable(result);
   }
 
@@ -453,12 +413,6 @@
     tip = deps.tip;
     REV = M.reverseGraph(G);
     buildTiers();
-    for (const btn of document.querySelectorAll("#route-tabs .tab")) {
-      btn.addEventListener("click", () => {
-        state.tab = btn.dataset.routeTab;
-        schedule();
-      });
-    }
     deps.bindTooltip("route-wrap", "td[data-s]", showCellTip);
     mounted = true;
   }
