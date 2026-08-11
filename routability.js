@@ -27,7 +27,7 @@
   // Round payment sizes spanning what Lightning actually carries, from a tip
   // to a large transfer. The same list the distribution table uses for rows.
   const PAY_PRESETS = [1, 5, 10, 25, 50, 100, 250, 500, 1000];
-  const DEFAULT_PAY_USD = 50;
+  const DEFAULT_PAY_USD = 10;
 
   const TIER_NAMES = ["edgelord", "edge", "periphery", "center", "core"];
   const TIER_RANGES = ["p0 – p15", "p15 – p25", "p25 – p50", "p50 – p75", "p75 – p100"];

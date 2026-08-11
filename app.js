@@ -430,6 +430,11 @@
     },
     { label: "All general slots", frac: (m) => m.peerGeneralFrac, general: true },
     { label: "Congestion slot", frac: (m) => m.congestionSlotFrac },
+    // The whole protected bucket, not a per-slot slice: what the edge holds
+    // back for reputed traffic. Unaffected by the exemption, which only
+    // lifts per-peer rules inside general.
+    { label: "Protected bucket", frac: () =>
+      (100 - state.generalPct - state.congestionPct) / 100 },
   ];
 
   function cornerSelect(label, values, selected, format, onPick) {
