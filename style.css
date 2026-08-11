@@ -112,10 +112,10 @@ h1 {
    rather than letting space-between push it to the far edge. */
 .param-row label { max-width: 300px; }
 
+/* Sits between the result sections inside main, which already supplies the
+   page width and side padding; only vertical rhythm is needed here. */
 #filtering {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 4px 24px 0;
+  margin-top: 34px;
 }
 /* The control is a fixed-width column; the explainer takes the rest, so the
    prose keeps a readable measure instead of stretching the full 1200px. */

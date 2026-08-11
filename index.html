@@ -75,32 +75,6 @@
     </section>
   </div>
 </section>
-<section id="filtering">
-  <h2 class="results-head">Filtering</h2>
-  <div class="filter-row">
-    <label class="filter-control" id="filter-control">
-      <span class="filter-control-label">Minimum <code>max_htlc</code></span>
-      <select id="min-htlc" aria-label="max_htlc threshold below which channels enforce no per-peer rules"></select>
-    </label>
-    <div class="filter-explainer">
-      <p>
-        When enabled, edges that advertise a <code>max_htlc</code> less than the selected
-        amount do not enforce per-peer general liquidity restrictions. A payment through them may use the whole general bucket
-        instead. Turning <em>Unlimited Below Threshold</em> off removes this
-        exemption and pins the threshold to zero.
-      </p>
-      <p id="filter-default-note"></p>
-      <p class="filter-share" id="filter-share"></p>
-    </div>
-  </div>
-  <div class="chart-card" id="filter-hist"></div>
-  <p class="table-caption">
-    Advertised <code>max_htlc</code> across the graph's directed edges, four
-    bars per power of ten. Greyed bars are below the threshold and enforce no
-    per-peer rules; the marked bar is cut at the threshold, since a bar spans
-    a range of values.
-  </p>
-</section>
 <main>
   <section id="results">
     <details class="result-section" open>
@@ -112,6 +86,33 @@
        </div>
       <div id="metrics"></div>
     </details>
+
+    <section id="filtering">
+      <h2 class="results-head">Filtering</h2>
+      <div class="filter-row">
+        <label class="filter-control" id="filter-control">
+          <span class="filter-control-label">Minimum <code>max_htlc</code></span>
+          <select id="min-htlc" aria-label="max_htlc threshold below which channels enforce no per-peer rules"></select>
+        </label>
+        <div class="filter-explainer">
+          <p>
+            When enabled, edges that advertise a <code>max_htlc</code> less than the selected
+            amount do not enforce per-peer general liquidity restrictions. A payment through them may use the whole general bucket
+            instead. Turning <em>Unlimited Below Threshold</em> off removes this
+            exemption and pins the threshold to zero.
+          </p>
+          <p id="filter-default-note"></p>
+          <p class="filter-share" id="filter-share"></p>
+        </div>
+      </div>
+      <div class="chart-card" id="filter-hist"></div>
+      <p class="table-caption">
+        Advertised <code>max_htlc</code> across the graph's directed edges, four
+        bars per power of ten. Greyed bars are below the threshold and enforce no
+        per-peer rules; the marked bar is cut at the threshold, since a bar spans
+        a range of values.
+      </p>
+    </section>
 
     <details class="result-section" open>
       <summary class="results-head">Channel distribution</summary>
