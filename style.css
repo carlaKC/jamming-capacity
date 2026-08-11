@@ -150,6 +150,13 @@ h1 {
   transition: border-color 300ms ease, box-shadow 300ms ease;
 }
 .filter-control select:hover { border-color: var(--clay); }
+/* pointer-events: none so hovering a locked select still reaches the label,
+   which is where the "turn the toggle on" tooltip listens. */
+.filter-control select:disabled {
+  pointer-events: none;
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .filter-control select:focus-visible {
   outline: none;
   border-color: var(--moss);
@@ -482,6 +489,26 @@ select.corner-select {
   transition: border-color 300ms ease, box-shadow 300ms ease;
 }
 select.corner-select + select.corner-select { margin-left: 6px; }
+/* The payment box wears the same pill as the selects beside it, sized for a
+   dollar figure rather than a sentence. */
+input.route-pay {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+  width: 90px;
+  padding: 5px 10px;
+  border: 1.5px solid var(--grid);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  transition: border-color 300ms ease, box-shadow 300ms ease;
+}
+input.route-pay:focus-visible {
+  outline: none;
+  border-color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(93, 112, 82, 0.25);
+}
+input.route-pay.invalid { border-color: #A85448; }
 /* The price is set in Parameters now, so the corner states it rather than
    offering a second place to change it. */
 .corner-note {
@@ -599,17 +626,11 @@ table.heat tbody td, table.heat tfoot td {
   opacity: 0.72;
   white-space: nowrap;
 }
-/* The end-to-end row answers a different question from the bands above it --
-   payments, not channels -- so it is set apart rather than read as one more
-   band. */
-table.route-table tfoot td, table.route-table tfoot th {
-  border-top: 2px solid var(--ink-2);
-}
 /* Routing the graph takes a moment. Fading rather than blanking keeps the
    previous figures readable, so the table does not jump while the filter is
    being dragged across it. */
 #route-wrap.is-busy { opacity: 0.45; transition: opacity 120ms ease; }
-#route-wrap td[data-band], #route-wrap td[data-end] { cursor: help; }
+#route-wrap td[data-s] { cursor: help; }
 
 /* ---- tooltip ---- */
 .tooltip {

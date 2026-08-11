@@ -36,6 +36,11 @@
     channelTypes: [483, 114, 50],
     minSlots: 5,
     allocPct: 5,
+    // Channels under the max_htlc threshold enforce no per-peer general
+    // restrictions: a payment through them may use the whole general bucket.
+    // Off pins the threshold to zero, so every channel enforces per-peer
+    // rules and nothing is exempt.
+    unlimitedBelowThreshold: true,
     prices: [50000, 75000, 100000],
     thresholds: [1, 5, 10, 25, 50, 100, 250, 500],
     tab: "general",
@@ -49,6 +54,14 @@
   // from the default floor rather than the whole graph, so the first paint is
   // already filtered and the tables agree with the line above them.
   let CDF = cdfFor(state.minHtlcSat);
+
+  // What an exempt channel answers to instead of the per-peer allocation:
+  // the whole general bucket, which is defined in both slot modes.
+  const exemptFrac = () => state.generalPct / 100;
+
+  // Where the threshold sat before the toggle was switched off, so switching
+  // it back on lands where the reader left it rather than at zero.
+  let rememberedFloor = DEFAULT_MIN_HTLC_SAT;
 
   const $ = (id) => document.getElementById(id);
 
@@ -339,16 +352,6 @@
 
   function renderTable(metrics) {
     const fixed = state.slotMode === "fixed";
-    $("table-caption").textContent = (fixed
-      ? "Fixed slot counts do not scale with max_accepted_htlcs, so every " +
-        "channel type gives the same figures; the columns are the buckets " +
-        "instead."
-      : cellMode().caption) +
-      " Hover a cell for sat values; + adds a threshold row, × removes one.";
-    // The bucket tabs pick one column group under percentage slots; under
-    // fixed slots all three are on screen, so there is nothing to pick.
-    $("bucket-tabs").classList.toggle("hidden", fixed);
-
     const groups = columnGroups(metrics);
     const table = el("table");
     const thead = el("thead");
@@ -388,12 +391,15 @@
             td.textContent = "n/a";
             td.classList.add("na");
           } else {
-            const req = M.requiredBaseSat(t, p, frac);
-            const share = M.shareAtOrAbove(CDF, req);
+            // Over every edge: the ones under the threshold are not gone,
+            // they answer to the whole general bucket instead of the
+            // per-peer frac.
+            const share = M.shareAdmitting(FULL_CDF, M.usdToSat(t, p), frac,
+              state.minHtlcSat, exemptFrac());
             td.textContent = (share * 100).toFixed(1) + "%";
             td.dataset.threshold = String(t);
             td.dataset.price = String(p);
-            td.dataset.required = String(Math.ceil(req));
+            td.dataset.required = String(Math.ceil(M.requiredBaseSat(t, p, frac)));
             td.dataset.share = String(share);
             shadeCell(td, share);
           }
@@ -412,13 +418,17 @@
   // What each bucket lets an edge forward, as a multiple of one general slot's
   // liquidity. Two slots is between a single slot and the whole allocation,
   // and is n/a when a peer is not allowed that many.
+  // The general columns collapse to one figure on an exempt row: a channel
+  // under the threshold enforces no per-peer rules, so one slot, two slots
+  // and the whole allocation all mean the same whole general bucket there.
   const PCT_COLUMNS = [
-    { label: "One general slot", frac: (m) => m.generalSlotFrac },
+    { label: "One general slot", frac: (m) => m.generalSlotFrac, general: true },
     {
       label: "Two general slots",
       frac: (m) => (m.k >= 2 ? m.generalSlotFrac * 2 : NaN),
+      general: true,
     },
-    { label: "All general slots", frac: (m) => m.peerGeneralFrac },
+    { label: "All general slots", frac: (m) => m.peerGeneralFrac, general: true },
     { label: "Congestion slot", frac: (m) => m.congestionSlotFrac },
   ];
 
@@ -456,8 +466,9 @@
       "What the edge at each percentile of the whole graph can forward, in " +
       "USD at " + fmtUsd(price) + " / BTC. Percentiles are over all " +
       fmtInt(FULL_CDF.total) +
-      " directed edges; greyed rows are below the current filter and are " +
-      "excluded from the tables above. Hover a cell for sat values.";
+      " directed edges; greyed rows are below the current threshold and " +
+      "enforce no per-peer rules, so their general columns all show the " +
+      "whole general bucket. Hover a cell for sat values.";
 
     const table = el("table");
     const thead = el("thead");
@@ -493,7 +504,7 @@
       }
       tr.appendChild(head);
       for (const c of PCT_COLUMNS) {
-        const frac = c.frac(m);
+        const frac = excluded && c.general ? exemptFrac() : c.frac(m);
         const td = el("td");
         if (!(frac > 0) || !isFinite(base)) {
           td.textContent = "n/a";
@@ -502,7 +513,8 @@
           const sat = base * frac;
           td.textContent = fmtUsdCents(M.satToUsd(sat, price));
           td.dataset.pctile = String(p);
-          td.dataset.bucket = c.label;
+          td.dataset.bucket = excluded && c.general
+            ? "Whole general bucket" : c.label;
           td.dataset.base = String(base);
           td.dataset.sat = String(sat);
           td.dataset.frac = String(frac);
@@ -569,15 +581,17 @@
         fmtPct(FULL_CDF.total ? b.count / FULL_CDF.total : 0, 1) + " of the graph"),
     ];
     if (floor >= b.hi) {
-      lines.push(el("div", "tt-line", "filtered out"));
+      lines.push(el("div", "tt-line", "below the threshold — no per-peer rules"));
     } else if (floor > b.lo) {
-      lines.push(el("div", "tt-line", "cut by the filter — " +
-        fmtInt(edgesIn(b.lo, floor)) + " dropped, " +
-        fmtInt(edgesIn(floor, b.hi)) + " kept"));
+      lines.push(el("div", "tt-line", "cut by the threshold — " +
+        fmtInt(edgesIn(b.lo, floor)) + " exempt, " +
+        fmtInt(edgesIn(floor, b.hi)) + " enforcing"));
     } else {
-      lines.push(el("div", "tt-line", "in view"));
+      lines.push(el("div", "tt-line", "enforces per-peer rules"));
     }
-    lines.push(el("div", "tt-line", "drag to move the filter"));
+    lines.push(el("div", "tt-line", state.unlimitedBelowThreshold
+      ? "drag to move the filter"
+      : LOCKED_FILTER_HINT));
     tooltip.replaceChildren(...lines);
     placeTooltip(x, y);
   }
@@ -696,6 +710,8 @@
     });
     overlay.addEventListener("pointerdown", (e) => {
       e.preventDefault();
+      // The tooltip is already saying why the filter will not move.
+      if (!state.unlimitedBelowThreshold) return;
       hideTooltip();
       startFilterDrag();
       setMinHtlc(snapFloor(satAt(e.clientX)));
@@ -766,30 +782,27 @@
   const FULL_VALUE = M.histValueTotal(DATA.hist);
 
   function renderFilter() {
-    // Written from the constants and the live price rather than the markup, so
-    // the stated dollar figure cannot drift from what the page applies.
-    $("filter-default-note").textContent =
-      "We set this value to a default of " + fmtInt(DEFAULT_MIN_HTLC_SAT) +
-      " sat, which is around " +
-      fmtUsdShort(M.satToUsd(DEFAULT_MIN_HTLC_SAT, state.price)) +
-      " at " + fmtUsd(state.price) + " / BTC, as this is the cutoff " +
-      "we're considering.";
-
     const kept = CDF.total;
     const total = FULL_CDF.total;
     const removed = total - kept;
     // Edges and liquidity answer different questions: the small channels are
     // numerous but hold almost nothing, and the gap between the two figures is
-    // the argument for filtering them at all.
+    // the argument for exempting them at all.
     const keptValue = state.minHtlcSat > 0
       ? M.histValueTotal(M.filterHist(DATA.hist, state.minHtlcSat))
       : FULL_VALUE;
     $("filter-share").textContent = state.minHtlcSat > 0
-      ? "Filtering " + fmtFilteredShare(removed, total, 1) + " of edges and " +
-        fmtFilteredShare(FULL_VALUE - keptValue, FULL_VALUE, 2) +
-        " of advertised liquidity — " + fmtInt(removed) + " of " +
-        fmtInt(total) + " directed edges dropped, " + fmtInt(kept) + " left."
-      : "No filter: all " + fmtInt(total) + " directed edges are in view.";
+      ? "Below the threshold: " + fmtFilteredShare(removed, total, 1) +
+        " of edges and " + fmtFilteredShare(FULL_VALUE - keptValue, FULL_VALUE, 2) +
+        " of advertised liquidity enforce no per-peer rules — " +
+        fmtInt(removed) + " of " + fmtInt(total) +
+        " directed edges exempt, " + fmtInt(kept) + " enforcing."
+      : state.unlimitedBelowThreshold
+        ? "No threshold: all " + fmtInt(total) +
+          " directed edges enforce per-peer rules."
+        : "Unlimited Below Threshold is off: the threshold is pinned to " +
+          "zero and all " + fmtInt(total) +
+          " directed edges enforce per-peer rules.";
     syncFilterSelect();
     $("filter-hist").replaceChildren(renderHistogram());
   }
@@ -798,13 +811,6 @@
   // it is handed the parameters it reads and decides for itself whether any of
   // them moved. Routing the whole graph is far too expensive to redo on every
   // keystroke in the Parameters row.
-  // Its channel bands are cut at the same whole-graph percentiles the Channel
-  // percentiles table prints, so the two sections mean the same thing by
-  // "p25". Fixed values, taken over FULL_CDF rather than the filtered one, so
-  // moving the filter empties a band rather than moving where it sits.
-  const BAND_THRESHOLDS =
-    window.RoutabilityView.CUTS.map((p) => M.percentileSat(FULL_CDF, p));
-
   function renderRoutability() {
     window.RoutabilityView.update({
       typeMetrics,
@@ -812,7 +818,7 @@
       slotMode: state.slotMode,
       price: state.price,
       minHtlcSat: state.minHtlcSat,
-      thresholds: BAND_THRESHOLDS,
+      exemptFrac: exemptFrac(),
       shade: shadeCell,
     });
   }
@@ -1054,6 +1060,51 @@
   $("min-slots").addEventListener("input", onAllocInput);
   $("alloc-pct").addEventListener("input", onAllocInput);
 
+  // ---------------- unlimited below threshold ----------------
+
+  // The threshold only means anything while channels under it are exempt, so
+  // switching the exemption off pins the filter to zero and locks it; the old
+  // floor is remembered and restored when the toggle comes back on.
+  function syncUnlimitedUi() {
+    for (const btn of document.querySelectorAll(".mode[data-unlimited]")) {
+      btn.classList.toggle("active",
+        (btn.dataset.unlimited === "on") === state.unlimitedBelowThreshold);
+    }
+    $("min-htlc").disabled = !state.unlimitedBelowThreshold;
+  }
+
+  function setUnlimited(on) {
+    if (on === state.unlimitedBelowThreshold) return;
+    state.unlimitedBelowThreshold = on;
+    if (!on) {
+      if (state.minHtlcSat > 0) rememberedFloor = state.minHtlcSat;
+      state.minHtlcSat = 0;
+    } else {
+      state.minHtlcSat = rememberedFloor;
+    }
+    CDF = cdfFor(state.minHtlcSat);
+    syncUnlimitedUi();
+    renderAll();
+  }
+
+  for (const btn of document.querySelectorAll(".mode[data-unlimited]")) {
+    btn.addEventListener("click", () => setUnlimited(btn.dataset.unlimited === "on"));
+  }
+
+  const LOCKED_FILTER_HINT =
+    "Turn on Unlimited Below Threshold to move the filter.";
+
+  // A locked select swallows no pointer events (its CSS turns them off), so
+  // the label underneath explains why it will not move.
+  $("filter-control").addEventListener("pointermove", (e) => {
+    if (state.unlimitedBelowThreshold) return;
+    tooltip.replaceChildren(el("div", "tt-line", LOCKED_FILTER_HINT));
+    placeTooltip(e.clientX, e.clientY);
+  });
+  $("filter-control").addEventListener("pointerleave", () => {
+    if (!state.unlimitedBelowThreshold) hideTooltip();
+  });
+
   // ---------------- tabs ----------------
 
   // Scoped to this table's own tabs: the routability section has a tab row of
@@ -1093,13 +1144,20 @@
     const p = Number(td.dataset.price);
     const req = Number(td.dataset.required);
     const share = Number(td.dataset.share);
-    tooltip.replaceChildren(
+    const lines = [
       el("div", "tt-value", fmtUsd(t) + " ≈ " + fmtSat(M.usdToSat(t, p))),
       el("div", "tt-line", "at $" + p.toLocaleString("en-US") + " / BTC"),
       el("div", "tt-line", "needs max_htlc ≥ " + fmtSat(req)),
-      el("div", "tt-line",
-        fmtInt(share * CDF.total) + " of " + fmtInt(CDF.total) + " edges qualify"),
-    );
+    ];
+    if (state.minHtlcSat > 0 && exemptFrac() > 0) {
+      lines.push(el("div", "tt-line",
+        "under " + compactSat(state.minHtlcSat) + " sat: needs ≥ " +
+        fmtSat(Math.ceil(M.usdToSat(t, p) / exemptFrac()))));
+    }
+    lines.push(el("div", "tt-line",
+      fmtInt(share * FULL_CDF.total) + " of " + fmtInt(FULL_CDF.total) +
+      " edges qualify"));
+    tooltip.replaceChildren(...lines);
     placeTooltip(x, y);
   }
 
@@ -1124,7 +1182,7 @@
     if (th.dataset.excluded) {
       lines.push(el("div", "tt-line",
         "below the " + compactSat(state.minHtlcSat) +
-        " sat filter, so excluded above"));
+        " sat threshold — enforces no per-peer rules"));
     }
     tooltip.replaceChildren(...lines);
     placeTooltip(x, y);
@@ -1173,6 +1231,7 @@
   mountFilterControl();
   mountPriceControl();
   syncSlotModeUi();
+  syncUnlimitedUi();
   // Formatting and the tooltip stay owned here, so the two files cannot drift
   // into rendering the same figure two ways.
   window.RoutabilityView.mount({

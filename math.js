@@ -200,6 +200,19 @@
     return cdf.suffix[lowerBound(cdf, requiredSat)] / cdf.total;
   }
 
+  // Share of edges (0..1) that admit a payment of baseSat, in two segments:
+  // edges at or above exemptSat answer to the column's frac, edges below it do
+  // not enforce per-peer rules and answer to the whole general bucket
+  // (exemptFrac). The denominator is every edge in the histogram.
+  function shareAdmitting(cdf, baseSat, frac, exemptSat, exemptFrac) {
+    const reqEnforced = frac > 0 ? baseSat / frac : Infinity;
+    const reqExempt = exemptFrac > 0 ? baseSat / exemptFrac : Infinity;
+    const enforced = shareAtOrAbove(cdf, Math.max(exemptSat, reqEnforced));
+    const exempt = Math.max(0,
+      shareAtOrAbove(cdf, reqExempt) - shareAtOrAbove(cdf, exemptSat));
+    return enforced + exempt;
+  }
+
   // Nearest-rank percentile: the smallest observed value at or below which at
   // least p% of the edges fall. p is 0..100; p=100 gives the largest value.
   function percentileSat(cdf, p) {
@@ -278,10 +291,13 @@
   }
 
   // Whether a direction will forward needSat at all: inside both advertised
-  // bounds, above the page's filter, and within whatever share of its
-  // max_htlc the bucket admits (frac = 1 for the unrestricted case).
-  function hopAdmits(maxHtlc, minHtlc, needSat, frac, minSat) {
-    return maxHtlc >= minSat && needSat >= minHtlc && frac * maxHtlc >= needSat;
+  // bounds and within whatever share of its max_htlc applies to it. A channel
+  // under the exemption threshold does not enforce per-peer rules, so it
+  // answers to the whole general bucket (exemptFrac) instead of the column's
+  // frac. Pass frac = 1 and exemptFrac = 1 for the unrestricted case.
+  function hopAdmits(maxHtlc, minHtlc, needSat, frac, exemptSat, exemptFrac) {
+    const f = maxHtlc < exemptSat ? exemptFrac : frac;
+    return needSat >= minHtlc && f * maxHtlc >= needSat;
   }
 
   // The route a sender would build to dest, from every node at once.
@@ -297,8 +313,9 @@
   // applied to the winner afterwards.
   //
   // frac is the share of a channel's max_htlc the bucket admits, applied to
-  // every hop. Pass 1 for the unrestricted case.
-  function routeCosts(rev, dest, amountSat, frac, minSat) {
+  // every hop at or above exemptSat; hops under it get exemptFrac instead.
+  // Pass frac = 1, exemptSat = 0, exemptFrac = 1 for the unrestricted case.
+  function routeCosts(rev, dest, amountSat, frac, exemptSat, exemptFrac) {
     const n = rev.n;
     const dist = new Float64Array(n).fill(Infinity);
     const amt = new Float64Array(n).fill(Infinity);
@@ -338,7 +355,8 @@
       if (hops[v] >= MAX_HOPS) continue;
       const need = amt[v];
       for (let e = rev.off[v]; e < rev.off[v + 1]; e++) {
-        if (!hopAdmits(rev.maxHtlc[e], rev.minHtlc[e], need, frac, minSat)) continue;
+        if (!hopAdmits(rev.maxHtlc[e], rev.minHtlc[e], need, frac,
+          exemptSat, exemptFrac)) continue;
         const u = rev.from[e];
         const cand = dist[v] +
           hopWeight(rev.baseMsat[e], rev.ppm[e], rev.cltv[e], need);
@@ -372,7 +390,7 @@
   // senders is optional: pass a list to score only those nodes. One backwards
   // search answers for every sender at once, so this is the cheap half of a
   // pair sample and there is no reason to walk the whole graph for it.
-  function sourceResults(g, dest, res, minSat, senders) {
+  function sourceResults(g, dest, res, senders) {
     const n = g.n;
     const ok = new Uint8Array(n);
     const sent = new Float64Array(n).fill(Infinity);
@@ -387,7 +405,7 @@
         const need = res.amt[v];
         if (!isFinite(need)) continue;
         if (res.hops[v] + 1 > MAX_HOPS) continue;
-        if (!hopAdmits(g.maxHtlc[e], g.minHtlc[e], need, 1, minSat)) continue;
+        if (!hopAdmits(g.maxHtlc[e], g.minHtlc[e], need, 1, 0, 1)) continue;
         if (need >= sent[u]) continue;
         sent[u] = need;
         hops[u] = res.hops[v] + 1;
@@ -399,20 +417,18 @@
 
   // ---------------- sampling nodes ----------------
 
-  // Nodes the filter leaves standing: those with at least one channel at or
-  // above the floor. Below it the page treats a channel as absent, so a node
-  // with nothing left is out of the sample entirely.
+  // Nodes with at least one channel. Nothing is excluded any more -- a channel
+  // under the threshold is exempt from per-peer rules rather than absent -- so
+  // this is simply everyone with a way in or out.
   //
   // Takes either view of the graph, and which one matters: over the forward CSR
-  // this is the nodes that can still send, over the reverse it is the ones that
-  // can still be paid. Sampling senders from the second would fill the pair
-  // sample with nodes that have no way to originate anything.
-  function eligibleNodes(view, minSat) {
+  // this is the nodes that can send, over the reverse it is the ones that can
+  // be paid. Sampling senders from the second would fill the pair sample with
+  // nodes that have no way to originate anything.
+  function eligibleNodes(view) {
     const out = [];
     for (let u = 0; u < view.n; u++) {
-      for (let e = view.off[u]; e < view.off[u + 1]; e++) {
-        if (view.maxHtlc[e] >= minSat) { out.push(u); break; }
-      }
+      if (view.off[u + 1] > view.off[u]) out.push(u);
     }
     return out;
   }
@@ -441,77 +457,44 @@
       .map((pair) => pair[1]);
   }
 
-  // ---------------- per-channel forwarding ----------------
+  // ---------------- placing nodes in the network ----------------
 
-  // Which band a channel falls in, against ascending sat thresholds. A channel
-  // sitting exactly on a threshold falls to the lower band.
-  function bandIndex(sat, thresholds) {
-    for (let i = 0; i < thresholds.length; i++) {
-      if (sat <= thresholds[i]) return i;
-    }
-    return thresholds.length;
-  }
-
-  // How many surviving channels sit in each band. Depends only on the filter.
-  function bandChannelCounts(g, minSat, thresholds) {
-    const counts = new Float64Array(thresholds.length + 1);
-    for (let e = 0; e < g.to.length; e++) {
-      if (g.maxHtlc[e] >= minSat) counts[bandIndex(g.maxHtlc[e], thresholds)]++;
-    }
-    return counts;
-  }
-
-  // Counters for one run: per band, how many forwarding attempts were made,
-  // how many the channel could meet unrestricted, and how many it could meet
-  // under each of the fractions on offer (one column of the table each).
-  function emptyBandTally(bands, cols) {
-    const okBucket = [];
-    for (let c = 0; c < cols; c++) okBucket.push(new Float64Array(bands));
-    return {
-      attempts: new Float64Array(bands),
-      okBase: new Float64Array(bands),
-      okBucket,
-      demand: new Float64Array(bands),
-      channels: new Float64Array(bands),
-    };
-  }
-
-  // One destination's contribution to the per-band counters.
-  //
-  // Every surviving channel u -> v is asked the same question: if a payment
-  // bound for dest were handed to u, could this channel carry it onwards? The
-  // amount is not the payment but what v must receive for it to land, so a
-  // channel deep in the network is asked for more than one beside the
-  // destination -- which is the whole reason this routes rather than reading a
-  // distribution.
-  //
-  // An attempt only counts where v can reach dest inside the hop cap. Where it
-  // cannot, nothing downstream works and the channel's own size is not what the
-  // payment failed on.
-  //
-  // Every fraction is scored against the same demand, taken off the route a
-  // sender builds today. A bucket that emptied the graph would otherwise
-  // reroute the payment and change what the channel is asked for, and the two
-  // figures in a cell would no longer differ by the bucket alone.
-  function tallyBands(g, dest, base, fracs, minSat, thresholds, acc) {
+  // The total max_htlc a node advertises outward, summed over its outgoing
+  // directions. The routability matrix's measure of how much of the network's
+  // capacity lives at a node.
+  function nodeOutTotals(g) {
+    const totals = new Float64Array(g.n);
     for (let u = 0; u < g.n; u++) {
-      if (u === dest) continue;
-      for (let e = g.off[u]; e < g.off[u + 1]; e++) {
-        const cap = g.maxHtlc[e];
-        if (cap < minSat) continue;
-        const v = g.to[e];
-        const need = base.amt[v];
-        if (!isFinite(need) || base.hops[v] + 1 > MAX_HOPS) continue;
-        const b = bandIndex(cap, thresholds);
-        const floor = g.minHtlc[e];
-        acc.attempts[b]++;
-        acc.demand[b] += need;
-        if (hopAdmits(cap, floor, need, 1, minSat)) acc.okBase[b]++;
-        for (let c = 0; c < fracs.length; c++) {
-          if (hopAdmits(cap, floor, need, fracs[c], minSat)) acc.okBucket[c][b]++;
-        }
-      }
+      for (let e = g.off[u]; e < g.off[u + 1]; e++) totals[u] += g.maxHtlc[e];
     }
+    return totals;
+  }
+
+  // Where a node sits in the network, by nearest-rank percentiles of the
+  // advertisers' totals: edgelord is p0-p15, edge p15-p25, periphery p25-p50,
+  // center p50-p75, core p75 and up. The bottom tier starts at p0, so every
+  // advertiser lands somewhere; only a node advertising nothing is -1 and out
+  // of the sample. A total exactly on a cut falls to the lower tier, as
+  // thresholds do everywhere on the page.
+  function nodeTiers(totals) {
+    const sorted = [];
+    for (const t of totals) if (t > 0) sorted.push(t);
+    sorted.sort((a, b) => a - b);
+    const rank = (p) => sorted[Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)];
+    const cuts = new Float64Array(sorted.length
+      ? [rank(15), rank(25), rank(50), rank(75)]
+      : [NaN, NaN, NaN, NaN]);
+    const tier = new Int8Array(totals.length);
+    for (let u = 0; u < totals.length; u++) {
+      const t = totals[u];
+      tier[u] = !(t > 0) ? -1
+        : t <= cuts[0] ? 0
+        : t <= cuts[1] ? 1
+        : t <= cuts[2] ? 2
+        : t <= cuts[3] ? 3
+        : 4;
+    }
+    return { tier, cuts };
   }
 
   return {
@@ -526,10 +509,8 @@
     eligibleNodes,
     hashNode,
     sampleNodes,
-    bandIndex,
-    bandChannelCounts,
-    emptyBandTally,
-    tallyBands,
+    nodeOutTotals,
+    nodeTiers,
     bucketSlotsPct,
     bucketSlotsFixed,
     slotsFitType,
@@ -547,6 +528,7 @@
     histValueTotal,
     histogramBuckets,
     shareAtOrAbove,
+    shareAdmitting,
     percentileSat,
   };
 });

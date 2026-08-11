@@ -59,6 +59,12 @@
       <p class="hint">k = max(min slots, ⌊general slots × pct⌋)</p>
       <label>Min slots <input type="number" id="min-slots" value="5" min="0" step="1"></label>
       <label>Percent <input type="number" id="alloc-pct" value="5" min="0" max="100" step="0.5"></label>
+      <label>Unlimited Below Threshold
+        <div class="mode-toggle" role="group" aria-label="Unlimited below threshold">
+          <button type="button" class="mode active" data-unlimited="on">on</button>
+          <button type="button" class="mode" data-unlimited="off">off</button>
+        </div>
+      </label>
       <p class="error hidden" id="alloc-error"></p>
     </section>
 
@@ -72,16 +78,16 @@
 <section id="filtering">
   <h2 class="results-head">Filtering</h2>
   <div class="filter-row">
-    <label class="filter-control">
+    <label class="filter-control" id="filter-control">
       <span class="filter-control-label">Minimum <code>max_htlc</code></span>
-      <select id="min-htlc" aria-label="Minimum max_htlc to keep a channel"></select>
+      <select id="min-htlc" aria-label="max_htlc threshold below which channels enforce no per-peer rules"></select>
     </label>
     <div class="filter-explainer">
       <p>
-        Edges that advertise a <code>max_htlc</code> less than the selected
-        amount are excluded from further analysis. This filtering is relevant
-        because some channels are simply too small to forward payments with any
-        additional restrictions placed on them.
+        When enabled, edges that advertise a <code>max_htlc</code> less than the selected
+        amount do not enforce per-peer general liquidity restrictions. A payment through them may use the whole general bucket
+        instead. Turning <em>Unlimited Below Threshold</em> off removes this
+        exemption and pins the threshold to zero.
       </p>
       <p id="filter-default-note"></p>
       <p class="filter-share" id="filter-share"></p>
@@ -90,8 +96,9 @@
   <div class="chart-card" id="filter-hist"></div>
   <p class="table-caption">
     Advertised <code>max_htlc</code> across the graph's directed edges, four
-    bars per power of ten. Greyed bars are filtered out; the marked bar is cut
-    at the threshold, since a bar spans a range of values.
+    bars per power of ten. Greyed bars are below the threshold and enforce no
+    per-peer rules; the marked bar is cut at the threshold, since a bar spans
+    a range of values.
   </p>
 </section>
 <main>
@@ -121,20 +128,7 @@
       <p class="table-caption" id="table-caption"></p>
       <div class="table-wrap" id="table-wrap"></div>
       <p class="error hidden" id="threshold-error"></p>
-      <h3 class="method-head">What this does not account for</h3>
-      <ul class="caveats">
-        <li>
-          <strong>Unknown max_htlc_value_in_flight.</strong>  This value is not
-	  gossiped. We use <code>max_htlc_msat</code> as a proxy, and where a
-	  direction advertises none we impute 99% of capacity.
-	  </li>
-        <li>
-          <strong>One HTLC in flight.</strong> We assume a single HTLC occupying
-	  the outgoing channel's allocation on its incoming channel, and do not
-	  account for liquidity distribution.
-	  </li>
-      </ul>
-    </details>
+          </details>
 
     <details class="result-section" open>
       <summary class="results-head">Channel percentiles</summary>
@@ -145,13 +139,6 @@
 	  <code>max_htlc</code> percentile can actually forward through one
 	  general slot, two, a peer's whole allocation, or a congestion slot.
         </p>
-        <p>
-	  Percentiles are taken over the <strong>whole</strong> graph, not the
-	  filtered set, so a row means the same edge whatever the filter is
-	  doing. Rows the filter excludes are greyed: the share it reports is
-	  where that boundary falls, so a filter dropping 20% of edges greys
-	  every row below the 20th percentile.
-        </p>
         </div>
       <p class="table-caption" id="pct-caption"></p>
       <div class="table-wrap" id="pct-wrap"></div>
@@ -161,29 +148,21 @@
       <summary class="results-head">General routability</summary>
       <div class="section-intro">
         <p>
-	  The tables above ask what a channel can carry in the abstract. This
-	  one asks what real payments ask of it. Senders and destinations are
-	  drawn at random from the nodes the filter leaves standing, routed
-	  between the way a sender would route, and every channel on the way is
-	  asked whether it could forward what the payment needs — which is not
-	  the payment itself but the payment plus every fee charged downstream
-	  of it.
+	  Each cell is a sender tier paying a destination tier, read down three
+	  rungs of the mitigation: the big figure holds every forwarded hop to
+	  its per-peer <em>slot allocation</em>; "in bucket" only asks the
+	  payment to fit inside the general bucket's liquidity share, with no
+	  slot division; "no mitigation" is the bare graph. The gap between
+	  the first two is what slot division costs, between the last two what
+	  the bucket itself costs. The sender's own first channel is exempt
+	  throughout, because the bucket applies where a node
+	  <em>forwards</em> and the sender forwards nothing.
         </p>
         <p>
-	  Rows are channels, banded by their own advertised
-	  <code>max_htlc</code> against the same whole-graph percentiles the
-	  table above prints. The large figure in each cell is the share that
-	  can forward through the general bucket; the small figure underneath is
-	  the share that could with no bucket at all. The gap between them is
-	  what the proposal costs — a low pair of figures is the graph's doing,
-	  a wide gap is the bucket's.
-        </p>
-        <p>
-	  The last row leaves the channels and asks whether the payment gets all
-	  the way across: the share of sampled sender/receiver pairs that still
-	  find a route once every forwarded hop is held to its allocation. The
-	  sender's own first channel is exempt, because the bucket applies where
-	  a node <em>forwards</em> and the sender forwards nothing.
+	  Channels under the threshold enforce no per-peer rules and admit up
+	  to the whole general bucket. Every advertising node lands in a tier;
+	  a route crosses whatever channels can carry the amount, whichever
+	  tier they belong to.
         </p>
       </div>
       <div class="tabs" id="route-tabs" role="tablist">
@@ -193,42 +172,6 @@
       <div class="route-controls" id="route-controls"></div>
       <p class="table-caption" id="route-caption"></p>
       <div class="table-wrap" id="route-wrap"></div>
-      <h3 class="method-head">What this does not account for</h3>
-      <ul class="caveats">
-        <li>
-          <strong>Only channels that can forward.</strong> A direction is in
-	  this graph only if it gossiped a policy and is not
-	  <code>disabled</code>, which leaves 60,162 of the 96,808 directions
-	  the filter above reports on. So these percentages are shares of a
-	  smaller graph than that one describes.
-          </li>
-        <li>
-          <strong>One route per pair.</strong> We take the route a sender's
-	  pathfinding would pick — cheapest by fee and time lock, within 20 hops
-	  — and hold it to the bucket. A real sender that fails retries
-	  elsewhere, so the end-to-end row is a lower bound on what eventually
-	  gets through.
-          </li>
-        <li>
-          <strong>Direct peers are included.</strong> A pair that already shares
-	  a channel has no forwarding node, so the bucket never applies and it
-	  is close to an automatic success in the end-to-end row. This flatters
-	  the well-connected, which is most of the graph's payment volume.
-          </li>
-        <li>
-          <strong>The demand is measured unrestricted.</strong> What a channel
-	  is asked to forward comes off today's cheapest route. Under the bucket
-	  a payment might reroute and be asked for slightly more, so the two
-	  figures in a cell differ by the bucket alone rather than by the bucket
-	  plus a change of route.
-          </li>
-        <li>
-          <strong>Advertised liquidity, not actual.</strong> As everywhere on
-	  this page, a channel's <code>max_htlc</code> stands in for its
-	  <code>max_htlc_value_in_flight</code>, and we say nothing about which
-	  side of the channel the balance is on.
-          </li>
-      </ul>
     </details>
 
   </section>
