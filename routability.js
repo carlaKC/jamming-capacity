@@ -188,7 +188,7 @@
       }
     }
     return {
-      cells, frac, amount, exemptSat, exemptFrac,
+      cells, frac, amount, exemptSat, exemptFrac, price: params.price,
       cuts: TIERS.cuts, counts: TIERS.counts,
       senders: TIERS.senders.map((s) => s.length),
       dests: TIERS.dests.map((d) => d.length),
@@ -229,10 +229,22 @@
     return td;
   }
 
-  function tierHead(cls, name, i) {
+  // The tier cuts are node totals in sat; shown as money so a reader can
+  // place a node without knowing the percentiles by heart.
+  function tierUsdRange(cuts, price, i) {
+    if (!(price > 0) || !isFinite(cuts[0])) return null;
+    const usd = (sat) => fmt.usdCompact(M.satToUsd(sat, price));
+    if (i === 0) return "≤ " + usd(cuts[0]);
+    if (i >= cuts.length) return "> " + usd(cuts[cuts.length - 1]);
+    return usd(cuts[i - 1]) + " – " + usd(cuts[i]);
+  }
+
+  function tierHead(cls, name, i, result) {
     const th = el("th", cls);
     th.appendChild(el("span", "band-name", name));
     th.appendChild(el("span", "band-range", TIER_RANGES[i]));
+    const range = tierUsdRange(result.cuts, result.price, i);
+    if (range) th.appendChild(el("span", "band-range", range));
     return th;
   }
 
@@ -244,7 +256,7 @@
     corner.appendChild(el("span", "corner-note", "sender ↓ · destination →"));
     hr.appendChild(corner);
     for (let d = 0; d < N_TIERS; d++) {
-      hr.appendChild(tierHead(null, "to " + TIER_NAMES[d], d));
+      hr.appendChild(tierHead(null, "to " + TIER_NAMES[d], d, result));
     }
     thead.appendChild(hr);
     table.appendChild(thead);
@@ -252,7 +264,7 @@
     const tbody = el("tbody");
     for (let s = 0; s < N_TIERS; s++) {
       const tr = el("tr");
-      tr.appendChild(tierHead("row-head", "from " + TIER_NAMES[s], s));
+      tr.appendChild(tierHead("row-head", "from " + TIER_NAMES[s], s, result));
       for (let d = 0; d < N_TIERS; d++) {
         const td = el("td");
         const cell = result.cells[s][d];

@@ -93,6 +93,13 @@
     if (x >= 1) return "$" + (Math.round(x * 10) / 10).toLocaleString("en-US");
     return "$" + (Math.round(x * 100) / 100).toFixed(2);
   }
+  // One formatter spanning cents to millions -- the routability tier cuts run
+  // from a few dollars at the edge to eight figures in the core.
+  function fmtUsdCompact(x) {
+    if (x >= 1e6) return "$" + (Math.round(x / 1e5) / 10).toLocaleString("en-US") + "M";
+    if (x >= 1e3) return "$" + (Math.round(x / 100) / 10).toLocaleString("en-US") + "k";
+    return fmtUsdShort(x);
+  }
   // compactUsd would render a million as "$1,000k"; prices reach that now.
   const fmtPriceShort = (x) =>
     x >= 1e6
@@ -1247,6 +1254,7 @@
       int: fmtInt,
       sat: fmtSat,
       usd: fmtUsd,
+      usdCompact: fmtUsdCompact,
       pct: fmtPct,
       compactSat,
     },
