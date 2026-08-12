@@ -186,6 +186,19 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 .chart-axis-title { font: 700 11.5px var(--sans); fill: var(--muted); }
+/* Percentile markers on the filter histogram: quiet dotted verticals, the
+   rank in small type above the plot. */
+.hist-pctile {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 1.5 3.5;
+  opacity: 0.55;
+}
+.hist-pctile-label {
+  font: 600 9px var(--sans);
+  fill: var(--muted);
+  opacity: 0.8;
+}
 /* Halo in-plot text so a bar behind it stays legible, rather than boxing it. */
 .chart-label {
   font: 800 12px var(--sans);

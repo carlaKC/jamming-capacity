@@ -683,6 +683,22 @@
       }
     }
 
+    // Quiet percentile markers: dotted verticals with the rank in small type
+    // above the plot. Over FULL_CDF like the percentile table, so a marker
+    // means the same edge whatever the filter is doing.
+    for (const p of PERCENTILES) {
+      const sat = M.percentileSat(FULL_CDF, p);
+      if (!isFinite(sat)) continue;
+      const x = gx(Math.max(1, sat));
+      node.appendChild(svg("line", {
+        x1: x, y1: GPAD.top, x2: x, y2: GPAD.top + GPH,
+        class: "hist-pctile",
+      }));
+      node.appendChild(svg("text", {
+        x, y: GPAD.top - 3, "text-anchor": "middle", class: "hist-pctile-label",
+      }, "p" + p));
+    }
+
     if (floor > 0) {
       const x = gx(floor);
       node.appendChild(svg("line", {
