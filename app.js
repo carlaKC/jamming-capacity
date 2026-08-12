@@ -21,7 +21,7 @@
 
   const state = {
     generalPct: 50,
-    congestionPct: 20,
+    congestionPct: 10,
     // Slots hard-set to fixed counts by default; "pct" splits them by
     // percentage of max_accepted_htlcs instead.
     slotMode: "fixed",
