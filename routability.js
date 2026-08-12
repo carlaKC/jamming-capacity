@@ -239,16 +239,16 @@
     return td;
   }
 
-  // A loss cell is one figure, the gap between two rungs in percentage
-  // points. The shading runs the other way from the success view -- darker is
-  // more loss -- so the trouble spots are what stand out.
+  // A loss cell is one figure, the gap between two rungs. The shading runs
+  // the other way from the success view -- darker is more loss -- so the
+  // trouble spots are what stand out.
   function lossFigureCell(td, loss) {
     if (!isFinite(loss)) {
       td.textContent = "n/a";
       td.classList.add("na");
       return td;
     }
-    td.appendChild(el("span", "cell-main", (loss * 100).toFixed(1) + "pp"));
+    td.appendChild(el("span", "cell-main", fmt.pct(loss, 1)));
     params.shade(td, Math.max(0, loss));
     return td;
   }
@@ -385,7 +385,6 @@
     // them. Its own row under the amount, with the current view explained
     // beneath it.
     const viewRow = el("div", "route-view-row");
-    viewRow.appendChild(el("span", "route-field-label", "View"));
     const toggle = el("div", "mode-toggle");
     toggle.setAttribute("role", "group");
     toggle.setAttribute("aria-label", "Routability view");

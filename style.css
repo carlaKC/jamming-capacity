@@ -598,7 +598,6 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
   font-size: 12.5px;
   color: var(--muted);
   margin: -8px 0 0;
-  max-width: 640px;
 }
 .route-view-note ul { margin: 0; padding-left: 18px; }
 .route-view-note li { margin: 2px 0; }
