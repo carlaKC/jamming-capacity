@@ -97,9 +97,10 @@
         <div class="filter-explainer">
           <p>
             When enabled, edges that advertise a <code>max_htlc</code> less than the selected
-            amount do not enforce per-peer general liquidity restrictions. A payment through them may use the whole general bucket
-            instead. Turning <em>Unlimited Below Threshold</em> off removes this
-            exemption and pins the threshold to zero.
+            amount assign 100% of their liquidity to the general bucket and place no
+            liquidity limit on its slots: the slot limit stays in place, but a payment
+            through them may use the whole channel. Turning <em>Unlimited Below
+            Threshold</em> off removes this exemption and pins the threshold to zero.
           </p>
           <p id="filter-default-note"></p>
           <p class="filter-share" id="filter-share"></p>

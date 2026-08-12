@@ -10,8 +10,9 @@
  * This reads the real topology (graph.js) rather than a distribution, because
  * what a route asks of each channel is not the payment but the payment plus
  * every fee charged downstream of it. Channels under the page's threshold
- * enforce no per-peer rules — they admit up to the whole general bucket — and
- * nodes under the p10 cut are never sampled as endpoints but stay in the
+ * assign all of their liquidity to the general bucket and put no liquidity
+ * limit on its slots — a payment through them may use the whole channel —
+ * and nodes under the p10 cut are never sampled as endpoints but stay in the
  * graph, where the router uses them only when they can carry the amount.
  *
  * All routing lives in math.js; this file owns the section's own state
@@ -62,7 +63,7 @@
   let REV = null;          // incoming-edge view, built once
   let TIERS = null;        // node tiers and per-tier samples, fixed per graph
   let params = null;       // { typeMetrics, channelTypes, slotMode, price,
-                           //   minHtlcSat, exemptFrac }
+                           //   minHtlcSat, bucketFrac }
   let fmt = null;
   let tip = null;
   let mounted = false;
@@ -155,7 +156,7 @@
 
   async function compute(id) {
     const exemptSat = params.minHtlcSat;
-    const exemptFrac = params.exemptFrac;
+    const bucketFrac = params.bucketFrac;
     const amount = amountSat();
     const frac = mitigatedFrac();
     const cells = emptyCells();
@@ -165,19 +166,20 @@
         if (id !== runId) return null;
         // Three searches per destination, one per rung of the ladder: what
         // routes with no mitigation at all; what fits inside the general
-        // bucket's liquidity share alone (the whole allocation, no slot
-        // division, so the exemption threshold changes nothing); and what
-        // survives the full per-peer slot allocation. Each answers for every
-        // sampled sender at once.
+        // bucket's liquidity alone (no slot division); and what survives the
+        // full per-peer slot allocation. A channel under the threshold is
+        // all general bucket with no per-slot liquidity limit, so it admits
+        // its whole max_htlc on both mitigated rungs (exemptFrac 1). Each
+        // search answers for every sampled sender at once.
         const base = M.routeCosts(REV, dest, amount, 1, 0, 1);
         const baseSrc = M.sourceResults(dest, base, TIERS.allSenders);
-        const inBucket = exemptFrac > 0
-          ? M.routeCosts(REV, dest, amount, exemptFrac, 0, 1)
+        const inBucket = bucketFrac > 0
+          ? M.routeCosts(REV, dest, amount, bucketFrac, exemptSat, 1)
           : null;
         const bucketSrc = inBucket
           ? M.sourceResults(dest, inBucket, TIERS.allSenders) : null;
         const res = frac > 0
-          ? M.routeCosts(REV, dest, amount, frac, exemptSat, exemptFrac)
+          ? M.routeCosts(REV, dest, amount, frac, exemptSat, 1)
           : null;
         const src = res ? M.sourceResults(dest, res, TIERS.allSenders) : null;
         for (let s = 0; s < N_TIERS; s++) {
@@ -198,7 +200,7 @@
       }
     }
     return {
-      cells, frac, amount, exemptSat, exemptFrac, price: params.price,
+      cells, frac, amount, exemptSat, bucketFrac, price: params.price,
       cuts: TIERS.cuts, counts: TIERS.counts,
       senders: TIERS.senders.map((s) => s.length),
       dests: TIERS.dests.map((d) => d.length),
@@ -297,7 +299,7 @@
           td.classList.add("na");
         } else {
           const share = cell.ok / cell.pairs;
-          const bucket = result.exemptFrac > 0 ? cell.okBucket / cell.pairs : NaN;
+          const bucket = result.bucketFrac > 0 ? cell.okBucket / cell.pairs : NaN;
           const base = cell.okBase / cell.pairs;
           if (state.view === "bucket") lossFigureCell(td, base - bucket);
           else if (state.view === "limits") lossFigureCell(td, bucket - share);
@@ -461,7 +463,7 @@
       el("div", "tt-value", TIER_NAMES[s] + " pays " + TIER_NAMES[d]),
       el("div", "tt-line", "per-peer allocation " + fmt.pct(share, 1)),
     ];
-    if (lastResult.exemptFrac > 0) {
+    if (lastResult.bucketFrac > 0) {
       lines.push(el("div", "tt-line", "whole general bucket " + fmt.pct(bucket, 1)));
     }
     lines.push(
@@ -486,7 +488,7 @@
   // most of those leave this section's inputs alone.
   function schedule() {
     if (!mounted || !params) return;
-    const key = [params.minHtlcSat, params.exemptFrac, params.price,
+    const key = [params.minHtlcSat, params.bucketFrac, params.price,
       state.payUsd, params.slotMode, chanType(), mitigatedFrac(),
     ].join("|");
     if (key === lastKey) return;

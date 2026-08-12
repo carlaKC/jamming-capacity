@@ -254,6 +254,17 @@ ok(!M.hopAdmits(1000, 500, 400, 0.1, 5000, 1),
     2, 100, 0.001, 2000, 0.4).hops[0], 2,
     "an exempt hop ignores the per-peer frac entirely");
 }
+// The page passes exemptFrac = 1: a channel under the threshold assigns all
+// of its liquidity to the general bucket and puts no liquidity limit on the
+// slots, so a forwarded hop under the threshold admits its full max_htlc.
+{
+  const g = csr(3, [[0, 1, 1000], [1, 2, 100000]]);
+  const rv = M.reverseGraph(g);
+  eq(M.routeCosts(rv, 2, 1000, 0.05, 2000, 1).hops[0], 2,
+    "an exempt hop admits everything it advertises");
+  ok(!isFinite(M.routeCosts(rv, 2, 1000, 0.05, 0, 1).amt[0]),
+    "with no threshold the same hop is held to the per-peer frac");
+}
 // A direction that will not accept the amount at its lower bound is no more
 // use than one too small to hold it. 0 -> 3 sets a 50-sat floor, so a 5-sat
 // payment goes the long way even though the channel is fat enough.

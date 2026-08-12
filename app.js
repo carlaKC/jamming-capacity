@@ -36,8 +36,9 @@
     channelTypes: [483, 114, 50],
     minSlots: 5,
     allocPct: 5,
-    // Channels under the max_htlc threshold enforce no per-peer general
-    // restrictions: a payment through them may use the whole general bucket.
+    // Channels under the max_htlc threshold assign all of their liquidity to
+    // the general bucket and put no liquidity limit on its slots: the slot
+    // counts stay, but a payment through them may use the whole channel.
     // Off pins the threshold to zero, so every channel enforces per-peer
     // rules and nothing is exempt.
     unlimitedBelowThreshold: true,
@@ -56,8 +57,10 @@
   let CDF = cdfFor(state.minHtlcSat);
 
   // What an exempt channel answers to instead of the per-peer allocation:
-  // the whole general bucket, which is defined in both slot modes.
-  const exemptFrac = () => state.generalPct / 100;
+  // everything it advertises. Under the threshold the whole channel is
+  // general and its slots carry no liquidity limit, so a single payment --
+  // which only ever wants one slot -- may use the full max_htlc.
+  const EXEMPT_FRAC = 1;
 
   // Where the threshold sat before the toggle was switched off, so switching
   // it back on lands where the reader left it rather than at zero.
@@ -399,10 +402,9 @@
             td.classList.add("na");
           } else {
             // Over every edge: the ones under the threshold are not gone,
-            // they answer to the whole general bucket instead of the
-            // per-peer frac.
+            // they admit their whole max_htlc instead of the per-peer frac.
             const share = M.shareAdmitting(FULL_CDF, M.usdToSat(t, p), frac,
-              state.minHtlcSat, exemptFrac());
+              state.minHtlcSat, EXEMPT_FRAC);
             td.textContent = (share * 100).toFixed(1) + "%";
             td.dataset.threshold = String(t);
             td.dataset.price = String(p);
@@ -426,8 +428,8 @@
   // liquidity. Two slots is between a single slot and the whole allocation,
   // and is n/a when a peer is not allowed that many.
   // The general columns collapse to one figure on an exempt row: a channel
-  // under the threshold enforces no per-peer rules, so one slot, two slots
-  // and the whole allocation all mean the same whole general bucket there.
+  // under the threshold puts no liquidity limit on its general slots, so one
+  // slot, two slots and the whole allocation all mean the whole channel.
   const PCT_COLUMNS = [
     { label: "One general slot", frac: (m) => m.generalSlotFrac, general: true },
     {
@@ -479,8 +481,8 @@
       "USD at " + fmtUsd(price) + " / BTC. Percentiles are over all " +
       fmtInt(FULL_CDF.total) +
       " directed edges; greyed rows are below the current threshold and " +
-      "enforce no per-peer rules, so their general columns all show the " +
-      "whole general bucket. Hover a cell for sat values.";
+      "put no liquidity limit on their general slots, so their general " +
+      "columns all show the whole channel. Hover a cell for sat values.";
 
     const table = el("table");
     const thead = el("thead");
@@ -516,7 +518,7 @@
       }
       tr.appendChild(head);
       for (const c of PCT_COLUMNS) {
-        const frac = excluded && c.general ? exemptFrac() : c.frac(m);
+        const frac = excluded && c.general ? EXEMPT_FRAC : c.frac(m);
         const td = el("td");
         if (!(frac > 0) || !isFinite(base)) {
           td.textContent = "n/a";
@@ -526,7 +528,7 @@
           td.textContent = fmtUsdCents(M.satToUsd(sat, price));
           td.dataset.pctile = String(p);
           td.dataset.bucket = excluded && c.general
-            ? "Whole general bucket" : c.label;
+            ? "Whole channel" : c.label;
           td.dataset.base = String(base);
           td.dataset.sat = String(sat);
           td.dataset.frac = String(frac);
@@ -593,7 +595,8 @@
         fmtPct(FULL_CDF.total ? b.count / FULL_CDF.total : 0, 1) + " of the graph"),
     ];
     if (floor >= b.hi) {
-      lines.push(el("div", "tt-line", "below the threshold — no per-peer rules"));
+      lines.push(el("div", "tt-line",
+        "below the threshold — no per-peer liquidity limits"));
     } else if (floor > b.lo) {
       lines.push(el("div", "tt-line", "cut by the threshold — " +
         fmtInt(edgesIn(b.lo, floor)) + " exempt, " +
@@ -806,7 +809,7 @@
     $("filter-share").textContent = state.minHtlcSat > 0
       ? "Below the threshold: " + fmtFilteredShare(removed, total, 1) +
         " of edges and " + fmtFilteredShare(FULL_VALUE - keptValue, FULL_VALUE, 2) +
-        " of advertised liquidity enforce no per-peer rules — " +
+        " of advertised liquidity enforce no per-peer liquidity limits — " +
         fmtInt(removed) + " of " + fmtInt(total) +
         " directed edges exempt, " + fmtInt(kept) + " enforcing."
       : state.unlimitedBelowThreshold
@@ -830,7 +833,7 @@
       slotMode: state.slotMode,
       price: state.price,
       minHtlcSat: state.minHtlcSat,
-      exemptFrac: exemptFrac(),
+      bucketFrac: state.generalPct / 100,
       shade: shadeCell,
     });
   }
@@ -1161,10 +1164,10 @@
       el("div", "tt-line", "at $" + p.toLocaleString("en-US") + " / BTC"),
       el("div", "tt-line", "needs max_htlc ≥ " + fmtSat(req)),
     ];
-    if (state.minHtlcSat > 0 && exemptFrac() > 0) {
+    if (state.minHtlcSat > 0) {
       lines.push(el("div", "tt-line",
         "under " + compactSat(state.minHtlcSat) + " sat: needs ≥ " +
-        fmtSat(Math.ceil(M.usdToSat(t, p) / exemptFrac()))));
+        fmtSat(Math.ceil(M.usdToSat(t, p)))));
     }
     lines.push(el("div", "tt-line",
       fmtInt(share * FULL_CDF.total) + " of " + fmtInt(FULL_CDF.total) +
@@ -1194,7 +1197,7 @@
     if (th.dataset.excluded) {
       lines.push(el("div", "tt-line",
         "below the " + compactSat(state.minHtlcSat) +
-        " sat threshold — enforces no per-peer rules"));
+        " sat threshold — no per-peer liquidity limits"));
     }
     tooltip.replaceChildren(...lines);
     placeTooltip(x, y);

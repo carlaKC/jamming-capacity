@@ -196,22 +196,23 @@ in the routing graph if it gossiped a policy and is not `disabled`, which is
 
 ## Filtering
 
-The **Filtering** section sets a floor on advertised `max_htlc`: edges below it
-are excluded from further analysis, treated as absent from the graph rather than
-down-weighted. Every table underneath is recomputed over the survivors, so its
-percentages are shares of what is left rather than of the whole network. The
-filtering matters because some channels are simply too small to forward payments
-with any additional restriction placed on them.
+The **Filtering** section sets a threshold on advertised `max_htlc`: edges
+below it assign 100% of their liquidity to the general bucket and place no
+liquidity limit on its slots. The slot counts stay in place, but a single
+payment — which only ever wants one slot — may use the whole channel. Nothing
+is removed from the graph; the threshold changes what a small channel enforces,
+not whether it exists. The exemption matters because some channels are simply
+too small to forward payments with any liquidity restriction placed on them.
 
 **The default floor is 100,000 sat** — about $75 at $75,000/BTC — which is the
 cutoff under consideration. A fresh page is therefore already filtered.
 
-Beside the dropdown, the section states what the current floor removes, as both
-a share of edges and a share of advertised liquidity. The two are worth reading
-together: at the default floor they are 23.8% and 0.12%. Nearly a quarter of the
-graph's directed edges advertise under 100,000 sat, and between them they hold
-about a thousandth of its advertised liquidity — which is the case for setting
-them aside.
+Beside the dropdown, the section states what the current threshold exempts, as
+both a share of edges and a share of advertised liquidity. The two are worth
+reading together: at the default threshold they are 23.8% and 0.12%. Nearly a
+quarter of the graph's directed edges advertise under 100,000 sat, and between
+them they hold about a thousandth of its advertised liquidity — which is the
+case for exempting them.
 
 Below the control sits a histogram of advertised `max_htlc` across all directed
 edges, four bars per power of ten from 1 sat to 1 G sat. Filtered bars grey out.

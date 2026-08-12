@@ -201,9 +201,10 @@
   }
 
   // Share of edges (0..1) that admit a payment of baseSat, in two segments:
-  // edges at or above exemptSat answer to the column's frac, edges below it do
-  // not enforce per-peer rules and answer to the whole general bucket
-  // (exemptFrac). The denominator is every edge in the histogram.
+  // edges at or above exemptSat answer to the column's frac, edges below it
+  // answer to exemptFrac of themselves -- the page passes 1, since an exempt
+  // channel is all general bucket with no per-slot liquidity limit. The
+  // denominator is every edge in the histogram.
   function shareAdmitting(cdf, baseSat, frac, exemptSat, exemptFrac) {
     const reqEnforced = frac > 0 ? baseSat / frac : Infinity;
     const reqExempt = exemptFrac > 0 ? baseSat / exemptFrac : Infinity;
@@ -292,9 +293,10 @@
 
   // Whether a direction will forward needSat at all: inside both advertised
   // bounds and within whatever share of its max_htlc applies to it. A channel
-  // under the exemption threshold does not enforce per-peer rules, so it
-  // answers to the whole general bucket (exemptFrac) instead of the column's
-  // frac. Pass frac = 1 and exemptFrac = 1 for the unrestricted case.
+  // under the exemption threshold answers to exemptFrac of itself instead of
+  // the column's frac -- the page passes 1, since an exempt channel is all
+  // general bucket with no per-slot liquidity limit. Pass frac = 1 and
+  // exemptFrac = 1 for the unrestricted case.
   function hopAdmits(maxHtlc, minHtlc, needSat, frac, exemptSat, exemptFrac) {
     const f = maxHtlc < exemptSat ? exemptFrac : frac;
     return needSat >= minHtlc && f * maxHtlc >= needSat;
