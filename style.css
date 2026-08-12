@@ -585,6 +585,24 @@ th.group-start, td.group-start { border-left: 1px solid var(--grid); }
   font-weight: 700;
   color: var(--ink-2);
 }
+/* The view selector sits on its own line under the amount, its explanation on
+   a third; flex-basis breaks the controls row without a second container. */
+.route-view-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.route-view-note {
+  flex-basis: 100%;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: -8px 0 0;
+  max-width: 640px;
+}
+.route-view-note ul { margin: 0; padding-left: 18px; }
+.route-view-note li { margin: 2px 0; }
+.route-view-note strong { color: var(--ink-2); }
 /* Two sentences of caption, and the second is long enough that running them
    together would read as one. */
 .caption-line { display: block; }

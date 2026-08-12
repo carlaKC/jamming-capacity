@@ -45,7 +45,17 @@
   const state = {
     payUsd: DEFAULT_PAY_USD,
     type: null,          // channel type under percentage slots
+    view: "success",     // which reading of the same searches the cells show
   };
+
+  // Three readings of the same three searches: the rates themselves, or one
+  // of the two gaps between them -- what the bucket alone costs, and what the
+  // slot and liquidity division inside it costs on top.
+  const VIEWS = [
+    { key: "success", label: "Success rates" },
+    { key: "bucket", label: "Loss due to bucket" },
+    { key: "limits", label: "Loss due to limits" },
+  ];
 
   let M = null;
   let G = null;            // forward CSR, straight off graph.js
@@ -229,6 +239,20 @@
     return td;
   }
 
+  // A loss cell is one figure, the gap between two rungs in percentage
+  // points. The shading runs the other way from the success view -- darker is
+  // more loss -- so the trouble spots are what stand out.
+  function lossFigureCell(td, loss) {
+    if (!isFinite(loss)) {
+      td.textContent = "n/a";
+      td.classList.add("na");
+      return td;
+    }
+    td.appendChild(el("span", "cell-main", (loss * 100).toFixed(1) + "pp"));
+    params.shade(td, Math.max(0, loss));
+    return td;
+  }
+
   // The tier cuts are node totals in sat; shown as money so a reader can
   // place a node without knowing the percentiles by heart.
   function tierUsdRange(cuts, price, i) {
@@ -272,9 +296,12 @@
           td.textContent = "n/a";
           td.classList.add("na");
         } else {
-          threeFigureCell(td, cell.ok / cell.pairs,
-            result.exemptFrac > 0 ? cell.okBucket / cell.pairs : NaN,
-            cell.okBase / cell.pairs);
+          const share = cell.ok / cell.pairs;
+          const bucket = result.exemptFrac > 0 ? cell.okBucket / cell.pairs : NaN;
+          const base = cell.okBase / cell.pairs;
+          if (state.view === "bucket") lossFigureCell(td, base - bucket);
+          else if (state.view === "limits") lossFigureCell(td, bucket - share);
+          else threeFigureCell(td, share, bucket, base);
           td.dataset.s = String(s);
           td.dataset.d = String(d);
         }
@@ -352,7 +379,69 @@
       });
       fields.push(field("Channel type", type));
     }
-    wrap.replaceChildren(...fields);
+
+    // The view selector rereads the finished searches rather than rerunning
+    // them, so toggling is instant: the same three rungs, three ways to read
+    // them. Its own row under the amount, with the current view explained
+    // beneath it.
+    const viewRow = el("div", "route-view-row");
+    viewRow.appendChild(el("span", "route-field-label", "View"));
+    const toggle = el("div", "mode-toggle");
+    toggle.setAttribute("role", "group");
+    toggle.setAttribute("aria-label", "Routability view");
+    const note = el("div", "route-view-note");
+    const buttons = [];
+    for (const v of VIEWS) {
+      const btn = el("button", "mode" + (v.key === state.view ? " active" : ""),
+        v.label);
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        if (state.view === v.key) return;
+        state.view = v.key;
+        for (const [b, key] of buttons) {
+          b.classList.toggle("active", key === state.view);
+        }
+        renderViewNote(note);
+        if (lastResult) renderTable(lastResult);
+      });
+      buttons.push([btn, v.key]);
+      toggle.appendChild(btn);
+    }
+    viewRow.appendChild(toggle);
+    renderViewNote(note);
+    wrap.replaceChildren(...fields, viewRow, note);
+  }
+
+  // What the current view's figures mean, spelled out under the selector.
+  function renderViewNote(note) {
+    note.replaceChildren();
+    if (state.view === "success") {
+      const ul = el("ul");
+      const items = [
+        ["No mitigation", "the success rate for forwarding this payment size " +
+          "with no channel jamming mitigation in place."],
+        ["In bucket", "the success rate for payments restricted to the " +
+          "general bucket, with no slot or liquidity limitations beyond the " +
+          "bucket's size."],
+        ["Success rate", "the success rate for forwarding this payment with " +
+          "the full mitigation in place."],
+      ];
+      for (const [term, text] of items) {
+        const li = el("li");
+        li.appendChild(el("strong", null, term));
+        li.appendChild(document.createTextNode(": " + text));
+        ul.appendChild(li);
+      }
+      note.appendChild(ul);
+    } else if (state.view === "bucket") {
+      note.textContent = "The decrease in payment forwarding success when " +
+        "limited only to the resources assigned to the general bucket, " +
+        "compared to no mitigation.";
+    } else {
+      note.textContent = "The decrease in payment forwarding success when " +
+        "the slots and liquidity in the general bucket are limited, compared " +
+        "to just limiting payments to the general bucket.";
+    }
   }
 
   function setBusy(busy) {
