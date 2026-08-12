@@ -20,7 +20,7 @@
   const DEFAULT_MIN_HTLC_SAT = 100000;
 
   const state = {
-    generalPct: 40,
+    generalPct: 50,
     congestionPct: 20,
     // Slots hard-set to fixed counts by default; "pct" splits them by
     // percentage of max_accepted_htlcs instead.

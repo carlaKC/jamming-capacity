@@ -1080,8 +1080,8 @@ def main(argv=None):
     parser.add_argument("--channel-types", type=int, nargs="+",
                         default=[483, 114, 50], metavar="N",
                         help="max_accepted_htlcs columns (default: 483 114 50)")
-    parser.add_argument("--general-pct", type=float, default=40, metavar="P",
-                        help="general bucket %% of liquidity (default: 40)")
+    parser.add_argument("--general-pct", type=float, default=50, metavar="P",
+                        help="general bucket %% of liquidity (default: 50)")
     parser.add_argument("--congestion-pct", type=float, default=20, metavar="P",
                         help="congestion bucket %% of liquidity (default: 20)")
     parser.add_argument("--slot-mode", choices=("pct", "fixed"), default="fixed",
