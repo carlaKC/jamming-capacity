@@ -312,9 +312,14 @@
   // carrying the least. The hop cap is enforced during the search rather than
   // applied to the winner afterwards.
   //
-  // frac is the share of a channel's max_htlc the bucket admits, applied to
-  // every hop at or above exemptSat; hops under it get exemptFrac instead.
-  // Pass frac = 1, exemptSat = 0, exemptFrac = 1 for the unrestricted case.
+  // frac is the share of a channel's max_htlc the bucket admits. The bucket
+  // sits on the forwarding node's incoming channel -- an HTLC occupies that
+  // channel's resources for as long as it is in flight, and the forward is
+  // what commits them -- so a hop is constrained exactly when the node it
+  // enters forwards. That covers every hop including the sender's first, and
+  // exempts only the hop into the destination, which just receives. Hops
+  // under exemptSat get exemptFrac instead of frac. Pass frac = 1,
+  // exemptSat = 0, exemptFrac = 1 for the unrestricted case.
   function routeCosts(rev, dest, amountSat, frac, exemptSat, exemptFrac) {
     const n = rev.n;
     const dist = new Float64Array(n).fill(Infinity);
@@ -354,9 +359,15 @@
       // cheapest path to v rather than on every path to it.
       if (hops[v] >= MAX_HOPS) continue;
       const need = amt[v];
+      // An edge into v is bucket-constrained only if v forwards; the
+      // destination holds no resources open, so its in-edges answer to their
+      // raw advertised bounds alone.
+      const vFrac = v === dest ? 1 : frac;
+      const vExemptSat = v === dest ? 0 : exemptSat;
+      const vExemptFrac = v === dest ? 1 : exemptFrac;
       for (let e = rev.off[v]; e < rev.off[v + 1]; e++) {
-        if (!hopAdmits(rev.maxHtlc[e], rev.minHtlc[e], need, frac,
-          exemptSat, exemptFrac)) continue;
+        if (!hopAdmits(rev.maxHtlc[e], rev.minHtlc[e], need, vFrac,
+          vExemptSat, vExemptFrac)) continue;
         const u = rev.from[e];
         const cand = dist[v] +
           hopWeight(rev.baseMsat[e], rev.ppm[e], rev.cltv[e], need);
@@ -381,17 +392,17 @@
 
   // Which nodes can pay dest, given a completed backwards search.
   //
-  // The sender's own first hop is not bucket-constrained: the bucket applies at
-  // a forwarding node's outgoing channel, and the sender forwards nothing. So
-  // routeCosts() runs with the bucket applied to every hop -- correct for all
-  // of them but the first -- and the first is settled here against the raw
-  // max_htlc instead. Among qualifying first hops the cheapest wins.
+  // Whether a hop is constrained depends only on the node it enters -- the
+  // bucket sits on a forwarding node's incoming channel, so the sender's first
+  // hop is judged by its peer like any other -- which means routeCosts()
+  // already applied the right rule to every hop and a sender's answer is read
+  // straight off the search.
   //
   // senders is optional: pass a list to score only those nodes. One backwards
   // search answers for every sender at once, so this is the cheap half of a
   // pair sample and there is no reason to walk the whole graph for it.
-  function sourceResults(g, dest, res, senders) {
-    const n = g.n;
+  function sourceResults(dest, res, senders) {
+    const n = res.amt.length;
     const ok = new Uint8Array(n);
     const sent = new Float64Array(n).fill(Infinity);
     const hops = new Int32Array(n).fill(-1);
@@ -400,17 +411,10 @@
     for (let i = 0; i < count; i++) {
       const u = from ? from[i] : i;
       if (u === dest) continue;
-      for (let e = g.off[u]; e < g.off[u + 1]; e++) {
-        const v = g.to[e];
-        const need = res.amt[v];
-        if (!isFinite(need)) continue;
-        if (res.hops[v] + 1 > MAX_HOPS) continue;
-        if (!hopAdmits(g.maxHtlc[e], g.minHtlc[e], need, 1, 0, 1)) continue;
-        if (need >= sent[u]) continue;
-        sent[u] = need;
-        hops[u] = res.hops[v] + 1;
-        ok[u] = 1;
-      }
+      if (!isFinite(res.amt[u])) continue;
+      sent[u] = res.amt[u];
+      hops[u] = res.hops[u];
+      ok[u] = 1;
     }
     return { ok, sent, hops };
   }

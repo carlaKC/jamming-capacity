@@ -160,6 +160,11 @@
           <li>
 	    Find the shortest path for each route, and determine whether the payment amount can be facilitated in the general bucket.
           </li>
+          <li>
+	    Each forwarding node enforces the bucket on its incoming channel,
+	    so every hop is restricted — including the sender's own channel —
+	    except the final one into the destination, which only receives.
+          </li>
         </ul>
         </div>
       <div class="route-controls" id="route-controls"></div>

@@ -123,8 +123,10 @@
   }
 
   // A payment succeeds if the general bucket can route it using any number
-  // of slots, so the mitigated figure holds each forwarded hop to the whole
-  // per-peer allocation -- k slots' worth of the general bucket.
+  // of slots, so the mitigated figure holds each hop to the whole per-peer
+  // allocation -- k slots' worth of the general bucket. The bucket sits on
+  // the forwarding node's incoming channel, so every hop is constrained
+  // except the one into the destination, which only receives.
   const mitigatedFrac = () => params.typeMetrics(chanType()).peerGeneralFrac;
   const amountSat = () => M.usdToSat(state.payUsd, params.price);
 
@@ -158,16 +160,16 @@
         // survives the full per-peer slot allocation. Each answers for every
         // sampled sender at once.
         const base = M.routeCosts(REV, dest, amount, 1, 0, 1);
-        const baseSrc = M.sourceResults(G, dest, base, TIERS.allSenders);
+        const baseSrc = M.sourceResults(dest, base, TIERS.allSenders);
         const inBucket = exemptFrac > 0
           ? M.routeCosts(REV, dest, amount, exemptFrac, 0, 1)
           : null;
         const bucketSrc = inBucket
-          ? M.sourceResults(G, dest, inBucket, TIERS.allSenders) : null;
+          ? M.sourceResults(dest, inBucket, TIERS.allSenders) : null;
         const res = frac > 0
           ? M.routeCosts(REV, dest, amount, frac, exemptSat, exemptFrac)
           : null;
-        const src = res ? M.sourceResults(G, dest, res, TIERS.allSenders) : null;
+        const src = res ? M.sourceResults(dest, res, TIERS.allSenders) : null;
         for (let s = 0; s < N_TIERS; s++) {
           const cell = cells[s][d];
           for (const u of TIERS.senders[s]) {

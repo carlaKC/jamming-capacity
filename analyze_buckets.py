@@ -520,7 +520,11 @@ def route_costs(rev, dest, amount_sat, frac, min_sat):
     every possible sender. What is minimised is LND's weight rather than the
     amount, so dist and amt are separate -- the cheapest route by weight is not
     always the one carrying the least. frac is the share of a channel's
-    max_htlc the bucket admits; pass 1 for the unrestricted case.
+    max_htlc the bucket admits; pass 1 for the unrestricted case. The bucket
+    sits on the forwarding node's incoming channel, so a hop is constrained
+    exactly when the node it enters forwards -- every hop including the
+    sender's first, except the one into the destination, which just receives
+    and answers only to its raw bounds (and the page's filter).
     """
     n = rev["n"]
     inf = float("inf")
@@ -544,8 +548,9 @@ def route_costs(rev, dest, amount_sat, frac, min_sat):
         if hops[v] >= MAX_HOPS:
             continue
         need = amt[v]
+        v_frac = 1 if v == dest else frac
         for e in range(roff[v], roff[v + 1]):
-            if not hop_admits(rmax[e], rmin[e], need, frac, min_sat):
+            if not hop_admits(rmax[e], rmin[e], need, v_frac, min_sat):
                 continue
             u = rfrom[e]
             cand = key + hop_weight(rbase[e], rppm[e], rcltv[e], need)
@@ -557,34 +562,26 @@ def route_costs(rev, dest, amount_sat, frac, min_sat):
     return amt, hops
 
 
-def source_results(g, dest, amt, hops, min_sat, senders=None):
+def source_results(dest, amt, hops, senders=None):
     """Which nodes can pay dest, given a completed backwards search.
 
-    The sender's own first hop is not bucket-constrained -- the bucket applies
-    where a node forwards, and the sender forwards nothing -- so it is settled
-    here against the raw max_htlc instead. senders is optional: one backwards
-    search answers for every sender at once, so there is no reason to walk the
-    whole graph when only a sample is being scored.
+    Whether a hop is constrained depends only on the node it enters -- the
+    bucket sits on a forwarding node's incoming channel, so the sender's first
+    hop is judged by its peer like any other -- which means route_costs already
+    applied the right rule to every hop and a sender's answer is read straight
+    off the search. senders is optional: one backwards search answers for every
+    sender at once, so there is no reason to walk the whole graph when only a
+    sample is being scored.
     """
-    n = g["n"]
+    n = len(amt)
     ok = [False] * n
     out_hops = [-1] * n
     inf = float("inf")
     for u in (range(n) if senders is None else senders):
-        if u == dest:
+        if u == dest or amt[u] == inf:
             continue
-        best = inf
-        for e in range(g["off"][u], g["off"][u + 1]):
-            v = g["to"][e]
-            need = amt[v]
-            if need == inf or hops[v] + 1 > MAX_HOPS:
-                continue
-            if not hop_admits(g["maxHtlc"][e], g["minHtlc"][e], need, 1, min_sat):
-                continue
-            if need < best:
-                best = need
-                out_hops[u] = hops[v] + 1
-                ok[u] = True
+        out_hops[u] = hops[u]
+        ok[u] = True
     return ok, out_hops
 
 
@@ -645,7 +642,9 @@ def tally_bands(g, dest, amt, hops, fracs, min_sat, thresholds, acc):
     channel deep in the network is asked for more than one beside the
     destination. An attempt only counts where v can reach dest inside the hop
     cap; where it cannot, nothing downstream works and the channel's own size
-    is not what the payment failed on.
+    is not what the payment failed on. The bucket is enforced by v on its
+    incoming channel when it forwards, so a channel whose far end IS the
+    destination is a final hop and answers to its raw bounds alone.
     """
     inf = float("inf")
     for u in range(g["n"]):
@@ -666,7 +665,7 @@ def tally_bands(g, dest, amt, hops, fracs, min_sat, thresholds, acc):
             if hop_admits(cap, floor, need, 1, min_sat):
                 acc["ok_base"][b] += 1
             for c, frac in enumerate(fracs):
-                if hop_admits(cap, floor, need, frac, min_sat):
+                if hop_admits(cap, floor, need, 1 if v == dest else frac, min_sat):
                     acc["ok_bucket"][c][b] += 1
 
 
@@ -712,7 +711,7 @@ def print_routability_table(graph, full_cdf, cfg, metrics, col=21, label_col=20)
     for dest in dests:
         amt, hops = route_costs(rev, dest, amount, 1.0, min_sat)
         tally_bands(g, dest, amt, hops, fracs, min_sat, thresholds, acc)
-        ok, _ = source_results(g, dest, amt, hops, min_sat, senders)
+        ok, _ = source_results(dest, amt, hops, senders)
         for u in senders:
             if u == dest:
                 continue
@@ -723,16 +722,18 @@ def print_routability_table(graph, full_cdf, cfg, metrics, col=21, label_col=20)
             if not frac:
                 continue
             r_amt, r_hops = route_costs(rev, dest, amount, frac, min_sat)
-            r_ok, _ = source_results(g, dest, r_amt, r_hops, min_sat, senders)
+            r_ok, _ = source_results(dest, r_amt, r_hops, senders)
             end_ok[c] += sum(1 for u in senders if u != dest and r_ok[u])
 
     print("-" * 78)
     print("General routability — per channel")
     print(f"Share of surviving channels that can forward ${cfg['payment_usd']:,.0f} "
           f"({amount:,.0f} sat at ${price:,.0f}/BTC)")
-    print("when a payment comes past, with the general bucket applied to every "
-          "channel a")
-    print("payment is forwarded over. Unrestricted share in brackets.")
+    print("when a payment comes past, with the general bucket enforced by each "
+          "forwarding")
+    print("node on its incoming channel; the final hop into the destination is "
+          "unrestricted.")
+    print("Unrestricted share in brackets.")
     print(f"Routable graph: {len(g['to']):,} directions over {g['n']:,} nodes "
           f"({gstats['noPolicy']:,} with no")
     print(f"policy and {gstats['disabled']:,} disabled are not in it).")
@@ -986,16 +987,19 @@ def self_test():
     assert sorted(rev["from"][rev["off"][0]:rev["off"][1]]) == [1, 3]
 
     # B pays C for 500 sat: B->A advertises 2000 and A->C 1500, so it clears
-    # unrestricted but not once a tenth of each forwarded hop is all that is
-    # available (A->C would need 5000).
+    # unrestricted but not once a tenth of B->A (200 sat) is all that A, who
+    # forwards, lets the payment hold. A->C lands on the destination and is
+    # never bucket-constrained.
     amt, hops = route_costs(rev, 2, 500, 1.0, 0)
-    ok, out_hops = source_results(g, 2, amt, hops, 0)
+    ok, out_hops = source_results(2, amt, hops)
     assert ok[1] and out_hops[1] == 2, (ok, out_hops)
     amt, hops = route_costs(rev, 2, 500, 0.1, 0)
-    assert not source_results(g, 2, amt, hops, 0)[0][1]
+    assert not source_results(2, amt, hops)[0][1]
     # A itself is a direct peer of C, so no hop is constrained and it clears
-    # either way -- the sender forwards nothing.
-    assert source_results(g, 2, amt, hops, 0)[0][0]
+    # either way: a tenth of A->C is only 150, but the final hop answers to
+    # its raw 1500.
+    assert amt[0] < float("inf"), amt[0]
+    assert source_results(2, amt, hops)[0][0]
 
     # Fees accumulate towards the sender: A->B charges 1000 msat + 100 ppm, so
     # delivering 1000 sat to B needs A to send 1001.1.
@@ -1043,8 +1047,9 @@ def self_test():
         band_channel_counts(g, 1600, [1500, 3000])
 
     # Every channel with a path onwards is asked once, for what its far end
-    # needs. Unrestricted they all clear; a tenth of each leaves only A->D,
-    # which is four million sat wide.
+    # needs. Unrestricted they all clear; a tenth of each forwarded hop leaves
+    # A->D, which is four million sat wide, and the two final hops into the
+    # destination (A->C and D->C), which the bucket never touches.
     thresholds = [1500, 3000]
     acc = {"attempts": [0] * 3, "ok_base": [0] * 3, "demand": [0.0] * 3,
            "ok_bucket": [[0] * 3]}
@@ -1052,7 +1057,7 @@ def self_test():
     tally_bands(g, 2, amt, hops, [0.1], 0, thresholds, acc)
     assert acc["attempts"] == [3, 2, 1], acc["attempts"]
     assert acc["ok_base"] == [3, 2, 1], acc["ok_base"]
-    assert acc["ok_bucket"][0] == [0, 0, 1], acc["ok_bucket"]
+    assert acc["ok_bucket"][0] == [2, 0, 1], acc["ok_bucket"]
     # Band 0 holds A->B, A->C and D->C. A->C and D->C sit next to the
     # destination and are asked for the payment itself; A->B is asked for what
     # B needs, which is the payment plus B->A's 1 ppm on the way back.

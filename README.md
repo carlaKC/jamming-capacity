@@ -170,10 +170,15 @@ bucket a payment might reroute and be asked for slightly more; holding the
 demand fixed is what makes the two figures differ by the bucket alone rather
 than by the bucket plus a change of route.
 
-**The sender's own first channel is not restricted**, in the end-to-end row. The
-bucket applies where a node *forwards*, and the sender forwards nothing, so on
-`s → n₁ → n₂ → d` the constrained channels are `(n₁,n₂)` and `(n₂,d)`. A pair
-that are already direct peers has no constrained channel at all.
+**The final channel into the destination is not restricted.** The bucket sits
+on the *incoming* channel of a node that forwards — an HTLC occupies that
+channel's resources for as long as it is in flight, and the forward is what
+commits them — so a channel is constrained exactly when the node at its far end
+forwards. On `s → n₁ → n₂ → d` the constrained channels are `(s,n₁)`, checked
+by n₁, and `(n₁,n₂)`, checked by n₂; `(n₂,d)` is never checked, because d only
+receives. The sender's own first channel therefore *is* restricted — by its
+peer, not by itself — and a pair that are already direct peers has no
+constrained channel at all.
 
 The band rows need very little sampling — every surviving channel is scored
 against every destination, so a cell averages millions of attempts and is steady

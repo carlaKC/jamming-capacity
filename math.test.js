@@ -223,23 +223,35 @@ ok(!M.hopAdmits(1000, 500, 400, 0.1, 5000, 1),
   eq(r.hops[0], 3, "a hop too small for the amount is not a route");
   ok(isFinite(r.amt[0]), "the long way round still reaches");
 }
-// The bucket takes a tenth of each hop, so a 1000-sat channel carries 100.
+// The bucket takes a tenth of each forwarded hop, so a 1000-sat channel
+// carries 100 -- but only where the node it enters forwards. The hop into the
+// destination is never bucket-constrained: the destination just receives.
 {
   eq(M.routeCosts(rev, 3, 100, 0.1, 0, 1).hops[1], 2, "exactly at the allocation clears");
   ok(!isFinite(M.routeCosts(rev, 3, 101, 0.1, 0, 1).amt[1]),
     "one sat over the allocation does not");
+  eq(M.routeCosts(rev, 3, 500, 0.1, 0, 1).hops[2], 1,
+    "the final hop is not bucket-constrained: raw 1000 carries 500");
+  eq(M.routeCosts(rev, 3, 5, 0.1, 0, 1).hops[0], 1,
+    "the 10-sat shortcut lands on the destination, so frac does not apply");
+  ok(!isFinite(M.routeCosts(rev, 3, 11, 1, 0, 1).amt[0]) ||
+    M.routeCosts(rev, 3, 11, 1, 0, 1).hops[0] === 3,
+    "the final hop still has to fit the amount in its raw max_htlc");
 }
-// Below the threshold the whole bucket applies instead of the column's frac:
-// the 10-sat shortcut offers 40% of itself, so 4 sat fits and 5 does not.
+// Below the threshold the whole bucket applies instead of the column's frac.
+// The exempt channel must sit on a forwarded hop to be tested at all -- here
+// 0 -> 1 is 10 sat and node 1 forwards, so it offers 40% of itself.
 {
-  const r = M.routeCosts(rev, 3, 5, 1, 600, 0.4);
-  eq(r.hops[2], 1, "2 -> 3 is above the threshold and unrestricted at frac 1");
-  eq(r.hops[0], 3, "the exempt shortcut only offers 40% of its 10 sat");
-  eq(M.routeCosts(rev, 3, 4, 1, 600, 0.4).hops[0], 1,
-    "4 sat fits the exempt shortcut's whole bucket");
+  const g = csr(3, [[0, 1, 10], [1, 2, 1000]]);
+  const rv = M.reverseGraph(g);
+  eq(M.routeCosts(rv, 2, 4, 1, 600, 0.4).hops[0], 2,
+    "4 sat fits the exempt hop's whole bucket");
+  ok(!isFinite(M.routeCosts(rv, 2, 5, 1, 600, 0.4).amt[0]),
+    "5 sat does not: the exempt hop only offers 40% of its 10 sat");
   // A threshold above the whole graph exempts every channel, so a column
   // whose own frac would refuse everything still routes.
-  eq(M.routeCosts(rev, 3, 100, 0.001, 2000, 0.4).hops[1], 2,
+  eq(M.routeCosts(M.reverseGraph(csr(3, [[0, 1, 1000], [1, 2, 1000]])),
+    2, 100, 0.001, 2000, 0.4).hops[0], 2,
     "an exempt hop ignores the per-peer frac entirely");
 }
 // A direction that will not accept the amount at its lower bound is no more
@@ -292,47 +304,49 @@ const CHOICE = csr(4, [
   eq(r.amt[0], r.amt[2], "so the sender is routed through 2");
 }
 
-// --- sourceResults: the sender's own first hop is not bucket-constrained.
-// 0 -> 1 -> 2, both channels 1000 sat, bucket at 10%. The 1 -> 2 hop must fit
-// inside 100 sat, but 0 -> 1 only has to fit inside the raw 1000.
+// --- sourceResults: reads senders off the completed search. The bucket sits
+// on the forwarding node's incoming channel, so the sender's first hop IS
+// constrained (its peer forwards) and the final hop into the destination is
+// not (the destination just receives).
+// 0 -> 1 -> 2, both channels 1000 sat, bucket at 10%. The 0 -> 1 hop must fit
+// inside 100 sat; 1 -> 2 lands on the destination and answers to the raw 1000.
 const FIRST = csr(3, [
   [0, 1, 1000],
   [1, 2, 1000],
 ]);
 {
-  const g = FIRST;
-  const r = M.routeCosts(M.reverseGraph(g), 2, 100, 0.1, 0, 1);
-  const s = M.sourceResults(g, 2, r);
-  eq(s.ok[0], 1, "0 pays 2: its first hop is exempt, the forwarding hop fits");
+  const r = M.routeCosts(M.reverseGraph(FIRST), 2, 100, 0.1, 0, 1);
+  const s = M.sourceResults(2, r);
+  eq(s.ok[0], 1, "0 pays 2: its first hop fits the allocation exactly");
   eq(s.hops[0], 2, "over two hops");
   eq(s.ok[1], 1, "1 pays 2 directly");
   eq(s.hops[1], 1, "a direct peer is one hop and has no constrained channel");
   eq(s.ok[2], 0, "a node never counts as paying itself");
 }
-// Raise the amount past what the forwarding hop's allocation admits and 0 is
-// cut off, while the direct pair is untouched.
+// Raise the amount past what the first hop's allocation admits and 0 is cut
+// off, while the direct pair is untouched.
 {
-  const g = FIRST;
-  const r = M.routeCosts(M.reverseGraph(g), 2, 101, 0.1, 0, 1);
-  const s = M.sourceResults(g, 2, r);
-  eq(s.ok[0], 0, "the forwarding hop is one sat short");
+  const r = M.routeCosts(M.reverseGraph(FIRST), 2, 101, 0.1, 0, 1);
+  const s = M.sourceResults(2, r);
+  eq(s.ok[0], 0, "the sender's first hop is one sat over its allocation");
   eq(s.ok[1], 1, "the direct pair still clears: no hop is constrained");
 }
-// The first hop is exempt from the bucket but not from its own max_htlc.
+// The first hop answers to the bucket like any other forwarded hop: 10% of
+// 120 sat is 12, nowhere near 100 -- though the raw channel would carry it.
 {
   const g = csr(3, [[0, 1, 120], [1, 2, 100000]]);
   const r = M.routeCosts(M.reverseGraph(g), 2, 100, 0.1, 0, 1);
-  eq(M.sourceResults(g, 2, r).ok[0], 1, "120 sat carries 100");
-  const r2 = M.routeCosts(M.reverseGraph(g), 2, 130, 0.1, 0, 1);
-  eq(M.sourceResults(g, 2, r2).ok[0], 0,
-    "the first hop still has to fit the amount in its raw max_htlc");
+  eq(M.sourceResults(2, r).ok[0], 0,
+    "the first hop is held to the bucket, not its raw max_htlc");
+  const r2 = M.routeCosts(M.reverseGraph(g), 2, 100, 1, 0, 1);
+  eq(M.sourceResults(2, r2).ok[0], 1, "unrestricted, 120 sat carries 100");
 }
-// Nor from its own min_htlc: the sender is exempt from the bucket, not from
-// what its peer will accept.
+// The first hop's own min_htlc still applies: the bucket is one admission
+// rule among the advertised ones, not a replacement for them.
 {
   const g = csr(3, [[0, 1, 100000, 0, 0, 500], [1, 2, 100000]]);
   const r = M.routeCosts(M.reverseGraph(g), 2, 100, 1, 0, 1);
-  eq(M.sourceResults(g, 2, r).ok[0], 0, "100 sat is under the first hop's floor");
+  eq(M.sourceResults(2, r).ok[0], 0, "100 sat is under the first hop's floor");
 }
 
 // --- the hop cap is enforced while searching, not applied to the winner.
@@ -344,7 +358,7 @@ const FIRST = csr(3, [
   eq(r.hops[5], 20, "5 is 20 hops from the end, which is the cap");
   eq(r.hops[4], -1, "21 hops is past it, so the search never labels 4");
   ok(!isFinite(r.amt[0]), "and nothing beyond that is reached at all");
-  const s = M.sourceResults(chain, 25, r);
+  const s = M.sourceResults(25, r);
   eq(s.ok[5], 1, "a 20-hop route is one a sender would build");
   eq(s.hops[5], 20, "and is reported as such");
   eq(s.ok[4], 0, "a 21-hop one is not");
